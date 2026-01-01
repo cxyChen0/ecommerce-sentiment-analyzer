@@ -1,0 +1,8 @@
+streamlit
+pandas
+plotly
+openai
+requests
+selenium
+pyinstaller
+python-dotenv
