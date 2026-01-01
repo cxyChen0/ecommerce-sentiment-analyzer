@@ -6,3 +6,4 @@ requests
 selenium
 pyinstaller
 python-dotenv
+webdriver-manager
