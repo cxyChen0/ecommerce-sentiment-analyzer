@@ -1,20 +1,22 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# 环境变量
+# === 安全配置 (必填) ===
 .env
+.env.local
 
-# 打包文件
-build/
-dist/
-*.spec
+# === Python 缓存 ===
+__pycache__/
+*.py[cod]
+*$py.class
 
-# IDE
-.idea/
-*.iml
+# === 爬虫产生的数据和缓存 ===
+# 你的代码会生成 SeleniumUserData 文件夹，体积很大，不要上传
+D:\Login_dataset\
+SeleniumUserData*/
+chrome_user_data/
 
-# 数据文件
+# 爬取下来的 CSV 数据文件 (看你想不想公开数据，不想公开就加上)
 *.csv
+
+# === 虚拟环境 ===
+venv/
+.venv/
+env/
