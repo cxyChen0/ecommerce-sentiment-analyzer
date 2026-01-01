@@ -19,12 +19,47 @@ load_dotenv()
 default_key_from_env = os.getenv("ALIYUN_API_KEY")
 
 st.set_page_config(page_title="电商智能选品分析系统", layout="wide")
-st.markdown("<style>.stAppDeployButton {display:none;}</style>", unsafe_allow_html=True)
+
+# === [关键修改] CSS 样式注入：隐藏不需要的界面元素 ===
+hide_streamlit_style = """
+    <style>
+    /* 1. 隐藏右上角的 '...' 菜单 (汉堡菜单) */
+    #MainMenu {visibility: hidden;}
+
+    /* 2. 隐藏顶部的 Header 条 (那条彩色的线和空白区域) */
+    header {visibility: hidden;}
+
+    /* 3. 隐藏底部的 'Made with Streamlit' 页脚 */
+    footer {visibility: hidden;}
+
+    /* 4. 隐藏右上角的 'Deploy' 按钮 */
+    .stAppDeployButton {display: none;}
+
+    /* 5. 调整顶部空白，因为隐藏了 Header，内容可以往上顶一点 */
+    .block-container {
+        padding-top: 2rem;
+    }
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # === 侧边栏 ===
 with st.sidebar:
     st.header("⚙️ 智能配置")
-    user_api_key = st.text_input("阿里云百炼 API Key", value=default_key_from_env or "", type="password")
+
+    # === [关键修改] API Key 安全显示逻辑 ===
+    if default_key_from_env:
+        # 情况 A: 环境变量已配置 -> 锁定输入框，保护隐私
+        st.success("✅ 密钥已通过环境配置安全加载")
+        # 这里的 value 只是展示用的掩码，真实的 key 存储在变量 user_api_key 中
+        st.text_input("阿里云百炼 API Key", value="sk-********************", disabled=True, type="password")
+        user_api_key = default_key_from_env
+    else:
+        # 情况 B: 未配置 -> 允许手动输入
+        user_api_key = st.text_input("阿里云百炼 API Key", value="", type="password", placeholder="请输入您的 API Key")
+        if not user_api_key:
+            st.warning("⚠️ 请输入 Key 以启用 AI 分析")
+
     st.markdown("---")
     st.header("🧠 AI 模型选择")
     selected_model = st.selectbox(
