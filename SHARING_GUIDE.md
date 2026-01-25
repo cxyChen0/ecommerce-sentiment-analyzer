@@ -1,16 +1,32 @@
-# 🚀 电商情感分析系统 - 分享指南
+# 🚀 电商智能选品分析系统 - 分享指南
 
 ## 📦 完整项目下载
 
-### 方法一：GitHub直接下载
+### 方法一：直接下载ZIP包
+
+#### GitHub
 1. 访问：https://github.com/cxyChen0/ecommerce-sentiment-analyzer
 2. 点击绿色的 "Code" 按钮
 3. 选择 "Download ZIP"
 4. 解压后即可获得完整代码
 
+#### Gitee
+1. 访问：https://gitee.com/cxyChen0/ecommerce-sentiment-analyzer（如果已配置）
+2. 点击右上角的 "克隆/下载" 按钮
+3. 选择 "下载ZIP"
+4. 解压后即可获得完整代码
+
 ### 方法二：Git克隆（需要Git）
+
+#### GitHub
 ```bash
 git clone https://github.com/cxyChen0/ecommerce-sentiment-analyzer.git
+cd ecommerce-sentiment-analyzer
+```
+
+#### Gitee
+```bash
+git clone https://gitee.com/cxyChen0/ecommerce-sentiment-analyzer.git
 cd ecommerce-sentiment-analyzer
 ```
 
@@ -25,8 +41,12 @@ ecommerce-sentiment-analyzer/
 ├── requirements.txt          # 📦 Python依赖
 ├── setup.sh                  # ⚙️ 部署脚本
 ├── DEPLOYMENT.md             # 📖 部署指南
+├── SHARING_GUIDE.md          # 📤 分享指南
 ├── README.md                 # 📝 项目说明
-└── .gitignore               # 🚫 Git忽略规则
+├── .gitignore               # 🚫 Git忽略规则
+├── .env.example             # 🔒 环境变量模板
+└── .streamlit/              # ⚙️ Streamlit配置
+    └── config.toml          # 📋 服务器配置
 ```
 
 ## ⚡ 快速启动
@@ -36,7 +56,33 @@ ecommerce-sentiment-analyzer/
 pip install -r requirements.txt
 ```
 
-### 2. 运行应用
+### 2. 配置环境变量
+
+#### 方法一：使用.env.example模板
+```bash
+# 复制模板文件为.env
+cp .env.example .env
+
+# 编辑.env文件，添加您的API Key
+# 使用文本编辑器打开.env文件，例如：
+# nano .env 或 notepad .env
+# 然后添加：
+# ALIYUN_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+#### 方法二：直接设置环境变量
+```bash
+# Windows (cmd)
+set ALIYUN_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+
+# Windows (PowerShell)
+$env:ALIYUN_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Linux/Mac
+export ALIYUN_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+### 3. 运行应用
 ```bash
 streamlit run app.py
 ```

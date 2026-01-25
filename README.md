@@ -6,9 +6,8 @@
 
 ```
 PyCharm2023/
-├── main.py              # 主程序入口（Streamlit应用）
 ├── analysis.py          # 数据分析模块
-├── app.py               # 应用配置
+├── app.py               # 主程序入口（Streamlit应用）
 ├── auto_typer.py        # 自动打字功能
 ├── crawler.py           # 爬虫模块
 ├── requirements.txt     # 项目依赖
@@ -127,7 +126,7 @@ PyCharm2023/
 
 2. **运行Streamlit应用**
    ```bash
-   streamlit run main.py
+   streamlit run app.py
    ```
 
 3. **访问应用**

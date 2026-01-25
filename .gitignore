@@ -1,6 +1,7 @@
-# === 安全配置 (必填) ===
+# === 安全配置 ===
 .env
 .env.local
+.env.example
 
 # === Python 缓存 ===
 __pycache__/
@@ -8,15 +9,49 @@ __pycache__/
 *$py.class
 
 # === 爬虫产生的数据和缓存 ===
-# 你的代码会生成 SeleniumUserData 文件夹，体积很大，不要上传
-D:\Login_dataset\
+# 爬虫数据目录
+D:\Login_dataset/
 SeleniumUserData*/
 chrome_user_data/
 
-# 爬取下来的 CSV 数据文件 (看你想不想公开数据，不想公开就加上)
+# 爬取下来的 CSV 数据文件
 *.csv
 
 # === 虚拟环境 ===
 venv/
 .venv/
 env/
+
+# === IDE 配置 ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === 构建输出 ===
+dist/
+build/
+*.spec
+
+# === 日志文件 ===
+*.log
+logs/
+
+# === 操作系统文件 ===
+.DS_Store
+Thumbs.db
+
+# === 临时文件 ===
+*.tmp
+*.temp
+*.bak
+
+# === 测试输出 ===
+.pytest_cache/
+.tox/
+coverage.xml
+htmlcov/
+
+# === Streamlit 配置 ===
+.streamlit/credentials.toml

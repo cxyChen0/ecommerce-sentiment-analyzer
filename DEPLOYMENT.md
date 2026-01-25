@@ -12,21 +12,31 @@
 ### 2. 配置文件检查
 - `.gitignore` 文件已添加，排除敏感信息和不必要的文件
 - `.env` 文件已配置，包含必要的环境变量（部署时需要重新配置）
+- `.env.example` 文件已提供，作为环境变量模板
+- `.streamlit/config.toml` 已配置，适合本地开发和部署
+- `setup.sh` 脚本已更新，包含完整的部署步骤
+
+### 3. Gitee代码仓库准备
+如果您使用Gitee作为代码仓库，确保：
+- 项目已推送到Gitee仓库
+- 仓库地址可公开访问（部署平台需要拉取代码）
+- 分支名称设置为常用名称（如main或master）
 
 ## 部署方案一：Streamlit Cloud（推荐）
 
-Streamlit Cloud是专门为Streamlit应用设计的托管平台，部署简单快捷。
+Streamlit Cloud是专门为Streamlit应用设计的托管平台，部署简单快捷，支持GitHub和Gitee仓库。
 
 ### 部署步骤
 
 1. **准备工作**
    - 注册Streamlit Cloud账号：https://share.streamlit.io/
-   - 将项目推送到GitHub仓库
+   - 将项目推送到GitHub或Gitee仓库
 
 2. **创建部署**
    - 登录Streamlit Cloud控制台
    - 点击"New app"按钮
-   - 选择您的GitHub仓库
+   - 选择您的代码仓库类型（GitHub或Gitee）
+   - 选择您的仓库
    - 选择主分支（main/master）
    - 设置应用入口文件：`app.py`
    - 配置环境变量（可选）：
@@ -51,7 +61,7 @@ Heroku是一个支持多种编程语言的云平台，适合部署Python应用�
 1. **准备工作**
    - 注册Heroku账号：https://www.heroku.com/
    - 安装Heroku CLI：https://devcenter.heroku.com/articles/heroku-cli
-   - 将项目推送到GitHub仓库
+   - 将项目推送到GitHub或Gitee仓库
 
 2. **创建Heroku应用**
    ```bash
@@ -66,26 +76,35 @@ Heroku是一个支持多种编程语言的云平台，适合部署Python应用�
    ```
 
 3. **配置文件**
-   - 创建 `Procfile` 文件（注意首字母大写）：
+   - 使用项目中已有的 `Procfile` 文件（如果没有，创建一个）：
      ```
      web: sh setup.sh && streamlit run app.py
      ```
-   - 创建 `setup.sh` 文件：
-     ```bash
-     #!/bin/bash
-     mkdir -p ~/.streamlit
-     echo "[server]" > ~/.streamlit/config.toml
-     echo "port = $PORT" >> ~/.streamlit/config.toml
-     echo "enableCORS = false" >> ~/.streamlit/config.toml
-     echo "headless = true" >> ~/.streamlit/config.toml
-     ```
-   - 确保 `setup.sh` 有执行权限：
+   - 项目中已包含 `setup.sh` 文件，确保它有执行权限：
      ```bash
      chmod +x setup.sh
      ```
 
 4. **部署应用**
+   
+   **从GitHub部署**：
    ```bash
+   # 推送代码到Heroku
+   git push heroku main
+   
+   # 打开应用
+   heroku open
+   ```
+   
+   **从Gitee部署**：
+   ```bash
+   # 克隆Gitee仓库到本地
+   git clone https://gitee.com/your-username/your-repo.git
+   cd your-repo
+   
+   # 添加Heroku remote
+   heroku git:remote -a your-app-name
+   
    # 推送代码到Heroku
    git push heroku main
    
@@ -112,57 +131,68 @@ Heroku是一个支持多种编程语言的云平台，适合部署Python应用�
 1. **准备工作**
    - 安装Docker：https://docs.docker.com/get-docker/
    - 注册Docker Hub账号（可选）：https://hub.docker.com/
+   - 从GitHub或Gitee克隆项目：
+     ```bash
+     # 从GitHub克隆
+     git clone https://github.com/your-username/your-repo.git
+     
+     # 或从Gitee克隆
+     git clone https://gitee.com/your-username/your-repo.git
+     
+     cd your-repo
+     ```
 
-2. **创建Dockerfile**
-   ```dockerfile
-   # 使用Python 3.11基础镜像
-   FROM python:3.11-slim
-   
-   # 设置工作目录
-   WORKDIR /app
-   
-   # 安装系统依赖
-   RUN apt-get update && apt-get install -y \
-       wget \
-       gnupg \
-       unzip \
-       curl \
-       libnss3 \
-       libgconf-2-4 \
-       libxss1 \
-       libappindicator1 \
-       libindicator7 \
-       xvfb \
-       libasound2 \
-       libpulse0 \
-       libfontconfig1 \
-       libdbus-1-3 \
-       --no-install-recommends \
-       && rm -rf /var/lib/apt/lists/*
-   
-   # 安装Chrome浏览器
-   RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
-       && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list' \
-       && apt-get update \
-       && apt-get install -y google-chrome-stable --no-install-recommends \
-       && rm -rf /var/lib/apt/lists/*
-   
-   # 复制项目文件
-   COPY requirements.txt .
-   COPY . .
-   
-   # 安装Python依赖
-   RUN pip install --no-cache-dir -r requirements.txt
-   
-   # 设置环境变量
-   ENV PYTHONUNBUFFERED=1
-   
-   # 暴露端口
-   EXPOSE 8501
-   
-   # 启动应用
-   CMD ["streamlit", "run", "app.py"]
-   ```
+2. **使用项目中的Dockerfile**
+   - 项目中已包含Dockerfile（如果没有，创建一个）：
+     ```dockerfile
+     # 使用Python 3.11基础镜像
+     FROM python:3.11-slim
+     
+     # 设置工作目录
+     WORKDIR /app
+     
+     # 安装系统依赖
+     RUN apt-get update && apt-get install -y \
+         wget \
+         gnupg \
+         unzip \
+         curl \
+         libnss3 \
+         libgconf-2-4 \
+         libxss1 \
+         libappindicator1 \
+         libindicator7 \
+         xvfb \
+         libasound2 \
+         libpulse0 \
+         libfontconfig1 \
+         libdbus-1-3 \
+         --no-install-recommends \
+         && rm -rf /var/lib/apt/lists/*
+     
+     # 安装Chrome浏览器
+     RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
+         && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list' \
+         && apt-get update \
+         && apt-get install -y google-chrome-stable --no-install-recommends \
+         && rm -rf /var/lib/apt/lists/*
+     
+     # 复制项目文件
+     COPY requirements.txt .
+     COPY . .
+     
+     # 安装Python依赖
+     RUN pip install --no-cache-dir -r requirements.txt
+     
+     # 设置环境变量
+     ENV PYTHONUNBUFFERED=1
+     
+     # 暴露端口
+     EXPOSE 8501
+     
+     # 启动应用
+     CMD ["streamlit", "run", "app.py"]
+     ```
 
 3. **构建Docker镜像**
    ```bash
@@ -171,19 +201,21 @@ Heroku是一个支持多种编程语言的云平台，适合部署Python应用�
 
 4. **本地测试Docker镜像**
    ```bash
-   docker run -p 8501:8501 ecommerce-analysis
+   docker run -p 8501:8501 -e ALIYUN_API_KEY=your_api_key ecommerce-analysis
    ```
 
 5. **部署到云端**
    - **方案A：部署到云服务器**
      - 在AWS/阿里云/腾讯云等平台购买云服务器
      - 安装Docker
-     - 上传Docker镜像或直接从Docker Hub拉取
+     - 从GitHub或Gitee克隆项目，构建镜像
+     - 或从Docker Hub拉取镜像
      - 运行容器：`docker run -d -p 80:8501 -e ALIYUN_API_KEY=your_api_key ecommerce-analysis`
    
    - **方案B：部署到容器服务**
      - AWS ECS、阿里云ECS、腾讯云TKE等
      - 按照各云平台的容器服务文档进行部署
+     - 可以配置从GitHub或Gitee仓库自动构建和部署
 
 ### 注意事项
 - Docker容器化部署提供更好的隔离性和可移植性
@@ -235,8 +267,12 @@ Heroku是一个支持多种编程语言的云平台，适合部署Python应用�
    mkdir -p ~/ecommerce-analysis
    cd ~/ecommerce-analysis
    
-   # 克隆项目
+   # 克隆项目（选择一个）
+   # 从GitHub克隆
    git clone https://github.com/your-username/your-repo.git .
+   
+   # 或从Gitee克隆
+   git clone https://gitee.com/your-username/your-repo.git .
    
    # 创建虚拟环境
    python3.11 -m venv venv
