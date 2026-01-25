@@ -1,7 +1,6 @@
 # === 安全配置 ===
 .env
 .env.local
-.env.example
 
 # === Python 缓存 ===
 __pycache__/
