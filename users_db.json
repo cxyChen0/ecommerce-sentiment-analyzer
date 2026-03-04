@@ -1,0 +1,14 @@
+[
+    {
+        "username": "admin",
+        "email": "admin@example.com",
+        "password": "scrypt:32768:8:1$94u9KbFKIglb6Wqj$e2655e80f7813e5c512dba86c025d7717b4f2f4625ba86aebd9a39bcf3cb4fdc930feb5fa396ec6378ca5dd179597ec48de028536dc4eac82a326a43c36ff6b7",
+        "role": "\u7ba1\u7406\u5458"
+    },
+    {
+        "username": "cxy",
+        "email": "3100321917@qq.com",
+        "password": "scrypt:32768:8:1$AIeOKKuAD95GXAae$033309bb4a9388e166fa64dd346c6b49676ba9e1b4c98b708e7355b8ffe66a862baff92aa9cb83c157ff644656065896023a592847fdea39b05e3a2c310a5664",
+        "role": "\u5546\u5bb6"
+    }
+]

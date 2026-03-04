@@ -1,9 +1,9 @@
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 尝试导入OpenAI，如失败则设置为None
 try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
@@ -12,23 +12,46 @@ except ImportError:
     OPENAI_AVAILABLE = False
 
 
-def get_client(api_key):
-    """获取OpenAI兼容客户端"""
+def get_client(model_name, user_provided_key=None):
+    """
+    获取OpenAI兼容客户端 (支持智能路由与密钥隔离)
+    """
     if not OPENAI_AVAILABLE:
         return None
-    key = api_key if api_key else os.getenv("ALIYUN_API_KEY")
-    if not key:
+
+    # 判断是否为火山方舟(豆包)模型
+    is_volcengine = model_name.startswith("ep-") or "doubao" in model_name.lower()
+
+    if is_volcengine:
+        # 火山方舟(豆包)
+        base_url = "https://ark.cn-beijing.volces.com/api/v3"
+
+        # 拦截阿里云 sk- 密钥
+        # 如果用户传了密钥，且不是 sk- 开头，读用户的, 否则读 .env 里的 VOLC_API_KEY
+        if user_provided_key and not user_provided_key.startswith("sk-"):
+            api_key = user_provided_key
+        else:
+            api_key = os.getenv("VOLC_API_KEY")
+
+    else:
+        # ======= 阿里云百炼通道 =======
+        base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+        # 阿里云密钥 sk- 开头
+        if user_provided_key and user_provided_key.startswith("sk-"):
+            api_key = user_provided_key
+        else:
+            api_key = os.getenv("ALIYUN_API_KEY")
+
+    if not api_key:
         return None
-    return OpenAI(api_key=key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
 
+    return OpenAI(api_key=api_key, base_url=base_url)
 
-# === 通用流式包装器 ===
-# === 通用流式包装器 (支持深度思考模式) ===
 def stream_wrapper(client, model, messages):
-    # 第一行输出模型身份
-    yield f"> 🤖 **当前智囊团**：`{model}` \n\n"
+    """通用流式包装器 (支持深度思考模式)"""
+    yield f"> 🤖 **分析引擎**：`{model}` \n\n"
 
-    # 如果是支持思考的模型，可以在 extra_body 中开启（视具体 API 渠道而定，阿里云百炼通常自动支持）
     extra_params = {}
     if "r1" in model.lower() or "deepseek" in model.lower():
         extra_params = {"enable_thinking": True}
@@ -41,187 +64,180 @@ def stream_wrapper(client, model, messages):
             extra_body=extra_params
         )
 
-        is_thinking = False  # 标记是否正在输出思考内容
-        has_answered = False  # 标记是否开始回答正文
+        is_thinking = False
+        has_answered = False
 
         for chunk in stream:
             if chunk.choices:
                 delta = chunk.choices[0].delta
 
-                # --- 处理思考过程 (Reasoning Content) ---
                 if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                    # 如果是第一次检测到思考内容，输出一个漂亮的引用头
                     if not is_thinking:
                         yield "> 🧠 **深度思考过程**：\n> "
                         is_thinking = True
-
-                    # 确保换行符也能保持在引用块(>)内
                     content = delta.reasoning_content.replace("\n", "\n> ")
                     yield content
 
-                # --- 处理正文回复 (Content) ---
                 if hasattr(delta, "content") and delta.content:
-                    # 如果之前在思考，现在开始回答了，加一个分割线
                     if is_thinking and not has_answered:
-                        yield "\n\n---\n\n### 📝 深度分析结论\n\n"
-                        is_thinking = False  # 思考结束
+                        yield "\n\n---\n\n"
+                        is_thinking = False
                         has_answered = True
-
                     yield delta.content
 
     except Exception as e:
-        yield f"❌ AI 思考中断: {str(e)}"
-
+        yield f"\n\n❌ **AI 分析中断**: {str(e)}"
 
 # ==========================================
-# 1. 单品深度分析 (Prompt 升级版)
+# 1. 单品深度分析 (精准数据导向版)
 # ==========================================
 def analyze_single_product_stream(comments_list, api_key=None, model="deepseek-v3.2-exp"):
-    client = get_client(api_key)
+    client = get_client(model, api_key)
     if not client:
-        yield "❌ 未配置 API Key"
+        yield "❌ 未配置对应平台的 API Key (阿里云或火山引擎)"
         return
 
-    # 数据预处理
     valid_comments = [str(c) for c in comments_list if len(str(c)) > 4]
-    # 稍微增加输入量，让分析更准确（前提是模型支持长上下文，现在的主流模型都支持）
-    text_input = "\n".join(valid_comments[:60])
+    text_input = "\n".join(valid_comments[:80]) # 增加样本量提升好评率计算准确度
 
     system_prompt = """
-    你是一位拥有10年经验的**电商消费者行为分析专家**。请基于提供的用户评论数据，挖掘数据背后的深层逻辑，并输出一份**高颜值、结构清晰、洞察深刻**的Markdown报告。
+    你是一位严谨的电商数据分析师。请基于提供的用户评论数据，输出客观、直接、一针见血的诊断报告。
+    不需要花哨的营销词汇，必须提供明确的数据预估和具体的改进方向。
 
-    ### 🎨 输出风格要求：
-    1. **排版美观**：大量使用Emoji图标（如 📊, 😡, 💡）来增强可读性。
-    2. **结构清晰**：使用 H3 (###) 标题分层。
-    3. **重点突出**：关键数据或结论请使用 **加粗** 或 `高亮`。
-    4. **引用原文**：在分析痛点时，必须摘录1-2句典型的用户原话作为佐证（使用 > 引用块）。
+    ### 📝 报告结构要求：
+    # 📦 单品评论多维诊断报告
 
-    ### 📝 报告结构模板：
-    # 🛍️ [商品名称] 深度体验分析报告
+    ### 1. 📊 核心指标预估 (供数据库记录参考)
+    - **预估好评率**：[请严格根据评论的情感倾向，推算出一个具体的百分比，例如 82%]
+    - **核心关注标签**：[提取3-5个用户最关注的客观属性，如：材质、发货速度、包装]
 
-    ### 1. 📊 情感气象台
-    - **整体评分预估**：(例如：⭐⭐⭐⭐ 4.2/5.0)
-    - **好评/差评比**：(估算百分比)
-    - **用户情绪关键词**：(列出5个最高频的形容词，如：`惊喜`、`失望`...)
+    ### 2. ⚠️ 核心痛点与缺陷 (按严重程度排序)
+    *要求：直击要害，必须指出具体的导致差评的原因。*
+    - **[痛点1简述]**：[具体表现] (引用1句典型原声：> "...")
+    - **[痛点2简述]**：[具体表现] (引用1句典型原声：> "...")
 
-    ### 2. 😡 核心痛点深挖 (Top 3)
-    *挖掘用户差评背后的真实需求，不仅仅是罗列问题，要分析“为什么”。*
-    - **痛点一**：[简短标题]
-      - 🔍 *现象描述*：...
-      - 💬 *用户原声*：> "..."
-      - 🔥 *严重程度*：(高/中/低)
-    (依次类推...)
+    ### 3. ⭐ 核心优势与爽点
+    *要求：找出用户真正愿意掏钱或复购的理由。*
+    - **[优势1简述]**：[具体表现]
+    - **[优势2简述]**：[具体表现]
 
-    ### 3. 👤 谁在买单？(用户画像)
-    - **典型人群**：(例如：追求性价比的学生党、注重品质的宝妈...)
-    - **核心使用场景**：(例如：宿舍追剧、办公室午休...)
-
-    ### 4. 💡 首席运营官建议
-    - **产品迭代**：(针对痛点的具体改进方案)
-    - **营销话术**：(针对好评点的放大策略)
+    ### 4. 🛠️ 改进方向与执行建议 (一针见血)
+    - **供应链/产品端**：[指出需要改进的工艺、材质或品控环节]
+    - **运营/客服端**：[指出详情页需要规避的预期差，或客服需要增加的话术]
+    
+    在报告的最后，严格输出一段用于生成词云的 JSON 数据。要求提取 20-30 个最核心的“产品特征”或“用户情感”关键词（如：透气性好、鞋底偏硬、做工精细、发货慢等，坚决去除没有意义的口语词），并根据用户提及的频率赋予 1-100 的权重。
+    格式必须严格如下（包含在代码块中）：
+    ```json
+    {"wordcloud": {"透气舒服": 95, "尺码偏小": 80, "物流太慢": 65, "做工一般": 40}}
+    ```
+    ⚠️ 严厉警告：
+    如果你的模型支持输出前置的深度思考或推演过程，请注意：在你的【思考/推演过程】阶段，绝对禁止使用任何 Markdown 格式的标题语法（例如不要使用 #、##、###）。思考过程必须是纯碎的普通段落文本。只有在输出最终正式报告时，才能使用上述 Markdown 语法。
     """
 
     messages = [
         {'role': 'system', 'content': system_prompt},
-        {'role': 'user', 'content': f"【用户评论数据】：\n{text_input}"}
+        {'role': 'user', 'content': f"【用户评论数据样本】：\n{text_input}"}
     ]
-
     yield from stream_wrapper(client, model, messages)
 
-
 # ==========================================
-# 2. 市场爆款分析 (Prompt 升级版)
+# 2. 市场调研分析 (客观趋势导向版)
 # ==========================================
 def analyze_market_trends_stream(comments_list, api_key=None, model="qwen-plus"):
-    client = get_client(api_key)
+    client = get_client(model, api_key)
     if not client:
-        yield "❌ 未配置 API Key"
+        yield "❌ 未配置对应平台的 API Key"
         return
 
     text_input = "\n".join(comments_list[:100])
 
     system_prompt = """
-    你是一位**电商市场趋势战略顾问**。基于这批热销商品的评论，请洞察该品类的**爆款基因**和**市场机会**。
+    你是一位专业的行业调研分析师。基于这批市场热销竞品的混合评论，请客观总结该品类的市场现状和未被满足的痛点。
+    拒绝废话，直击商业本质。
 
-    ### 🎨 输出要求：
-    - 语言犀利、专业，拒绝万金油式的废话。
-    - 使用 Markdown 表格进行归纳。
+    ### 📝 报告结构要求：
+    # 📈 市场品类趋势调研报告
 
-    ### 📝 报告结构：
-    # 🔥 行业爆款基因解码报告
-
-    ### 1. 🏆 用户买单的理由 (The "Why")
-    *用户选择下单的决定性因素是什么？（按权重排序）*
-    - 🥇 **第一要素**：...
-    - 🥈 **第二要素**：...
-    - 🥉 **第三要素**：...
-
-    ### 2. 💖 用户高频爽点 (Magic Moments)
-    *用户在什么瞬间觉得"买值了"？*
-    (请列举具体场景)
-
-    ### 3. 📉 蓝海机会点 (未被满足的需求)
-    *即便在爆款中，用户依然在抱怨什么？这里往往藏着下一个机会。*
-    - 🌊 **机会点 1**：...
-    - 🌊 **机会点 2**：...
-
-    ### 4. 🚀 爆款文案灵感
-    *基于用户喜欢的点，生成3条吸睛的短视频/详情页文案标题。*
-    1. ...
+    ### 1. 🎯 消费者核心决策因子
+    *按重要性降序，列出决定用户购买的 Top 3 因素。*
+    1. **[因子名称]**：[具体解释为什么用户看重这个]
     2. ...
-    3. ...
+
+    ### 2. 🌊 市场共性痛点 (机会空间)
+    *总结目前市场上头部产品依然存在的普遍问题，这正是新品切入的机会。*
+    - **[共性痛点1]**：...
+    - **[共性痛点2]**：...
+
+    ### 3. 💡 差异化突围建议
+    *基于上述痛点，如果我们要研发/上架一款新品，建议在哪些方面做差异化打法？*
+    - **产品差异化**：...
+    - **服务差异化**：...
+    
+    在报告的最后，严格输出一段用于生成词云的 JSON 数据。要求提取 20-30 个最核心的“产品特征”或“用户情感”关键词（如：透气性好、鞋底偏硬、做工精细、发货慢等，坚决去除没有意义的口语词），并根据用户提及的频率赋予 1-100 的权重。
+    格式必须严格如下（包含在代码块中）：
+    ```json
+    {"wordcloud": {"透气舒服": 95, "尺码偏小": 80, "物流太慢": 65, "做工一般": 40}}
+    ```
+    
+    ⚠️ 严厉警告：
+    如果你的模型支持输出前置的深度思考或推演过程，请注意：在你的【思考/推演过程】阶段，绝对禁止使用任何 Markdown 格式的标题语法（例如不要使用 #、##、###）。思考过程必须是纯碎的普通段落文本。只有在输出最终正式报告时，才能使用上述 Markdown 语法。
     """
 
     messages = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': text_input}]
     yield from stream_wrapper(client, model, messages)
 
-
 # ==========================================
-# 3. 竞品比对 (Prompt 升级版)
+# 3. 竞品比对 (战力客观对比版)
 # ==========================================
-def analyze_competitor_comparison_stream(my_product_name, my_comments, competitor_comments, api_key=None,
-                                         model="qwen-max"):
-    client = get_client(api_key)
+def analyze_competitor_comparison_stream(my_product_name, my_comments, competitor_comments, api_key=None, model="qwen-max"):
+    client = get_client(model, api_key)
     if not client:
-        yield "❌ 未配置 API Key"
+        yield "❌ 未配置对应平台的 API Key"
         return
 
-    my_text = "\n".join([str(c) for c in my_comments[:40]])
-    comp_text = "\n".join([str(c) for c in competitor_comments[:60]])
+    my_text = "\n".join([str(c) for c in my_comments[:50]])
+    comp_text = "\n".join([str(c) for c in competitor_comments[:50]])
 
     system_prompt = f"""
-    你是一位**电商竞争情报分析师**。我们正在进行一场残酷的市场对决。
-    **本品**：{my_product_name}
-    **竞品**：市场上的头部热销竞品
+    你是一名商业数据分析师。请对本品（{my_product_name}）与市场竞品进行客观、冷酷的横向数据对比。
+    切忌偏袒本品，指出真实的差距。
 
-    请输出一份**战斗檄文**级别的对比分析报告，重点在于**找差距、找优势**。
+    ### 📝 报告结构要求：
+    # ⚖️ 竞品差异化诊断报告
 
-    ### 📝 报告结构：
-    # ⚔️ 巅峰对决：本品 vs 竞品
-
-    ### 1. 📊 核心维度横向测评 (表格对比)
-    | 维度 | 🟢 本品表现 | 🔴 竞品表现 | 胜出方 |
+    ### 1. 📊 核心能力雷达比对
+    | 评估维度 | 本品核心表现 | 竞品核心表现 | 优劣势判定 |
     | :--- | :--- | :--- | :--- |
-    | **价格/性价比** | ... | ... | ... |
-    | **产品质量/做工** | ... | ... | ... |
-    | **功能体验** | ... | ... | ... |
-    | **服务/物流** | ... | ... | ... |
+    | **品质做工** | ... | ... | (本品优 / 竞品优 / 均等) |
+    | **性价比感知** | ... | ... | ... |
+    | **服务体验** | ... | ... | ... |
 
-    ### 2. 🛡️ 我们的护城河 (核心优势)
-    *我们哪里比竞品强？这是我们必须死守的阵地。*
+    ### 2. 🚨 严重落后项警告
+    *列出本品明显不如竞品的痛点，这是导致客户流失的核心原因。*
+    - ...
 
-    ### 3. ⚠️ 我们的阿喀琉斯之踵 (致命弱点)
-    *竞品哪里比我们强？这是必须立刻补齐的短板。*
-    *(请直言不讳，不要客气)*
+    ### 3. 🛡️ 核心壁垒项
+    *列出本品明显优于竞品的点，这是我们需要在详情页主打的卖点。*
+    - ...
 
-    ### 4. 🚀 反击战术板 (Action Plan)
-    *为了打赢这场仗，接下来两周我们必须做的三件事：*
+    ### 4. 📌 战术动作下达
+    *列出 3 条具体、可执行的优化动作（针对供应链或运营）。*
     1. ...
     2. ...
     3. ...
+    
+    
+    在报告的最后，严格输出一段用于生成词云的 JSON 数据。要求提取 20-30 个最核心的“产品特征”或“用户情感”关键词（如：透气性好、鞋底偏硬、做工精细、发货慢等，坚决去除没有意义的口语词），并根据用户提及的频率赋予 1-100 的权重。
+    格式必须严格如下（包含在代码块中）：
+    ```json
+    {"wordcloud": {"透气舒服": 95, "尺码偏小": 80, "物流太慢": 65, "做工一般": 40}}
+    ```
+    
+    ⚠️ 严厉警告：
+    如果你的模型支持输出前置的深度思考或推演过程，请注意：在你的【思考/推演过程】阶段，绝对禁止使用任何 Markdown 格式的标题语法（例如不要使用 #、##、###）。思考过程必须是纯碎的普通段落文本。只有在输出最终正式报告时，才能使用上述 Markdown 语法。
     """
 
-    user_prompt = f"【本品用户反馈】\n{my_text}\n\n【竞品用户反馈】\n{comp_text}"
+    user_prompt = f"【本品评价数据】\n{my_text}\n\n【竞品评价数据】\n{comp_text}"
     messages = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
 
     yield from stream_wrapper(client, model, messages)

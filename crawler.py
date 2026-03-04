@@ -185,6 +185,8 @@ def run_spider(target_url, worker_id=1):
     driver = None
     output_file = f"tmall_data_thread_{worker_id}.csv"
     product_title = "未知商品"
+    comments = []
+    sales_volume = 0
 
     try:
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
@@ -200,6 +202,20 @@ def run_spider(target_url, worker_id=1):
 
         # 进入评论区
         try:
+            # 淘宝/天猫常见的销量文案格式："月销 1000+", "已售 500件"
+            sales_element = driver.find_element(By.XPATH, "//*[contains(text(), '月销') or contains(text(), '已售')]")
+            sales_text = sales_element.text
+            # 使用正则提取里面的数字
+            sales_match = re.search(r'(\d+)', sales_text.replace(',', ''))
+            if sales_match:
+                sales_volume = int(sales_match.group(1))
+                # 如果带有'万'字，乘以10000
+                if '万' in sales_text:
+                    sales_volume *= 10000
+        except:
+            pass  # 没抓到也不报错，默认为0
+
+        try:
             driver.execute_script("window.scrollBy(0, 400);")
             nav_tab = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[text()='用户评价']")))
             driver.execute_script("arguments[0].click();", nav_tab)
@@ -213,6 +229,30 @@ def run_spider(target_url, worker_id=1):
             time.sleep(1)
         except:
             pass
+
+        # === 【剪枝优化 2 - 无真实评论一秒终止】 ===
+        try:
+            # 获取当前页面的纯文本
+            page_text = driver.find_element(By.TAG_NAME, "body").text
+
+            # 常见“无评论”的特征触发词
+            no_comment_flags = ["默认好评", "暂无评价", "帮助不大的评价", "还没有人评价", "评价方未及时做出评价"]
+
+            if any(flag in page_text for flag in no_comment_flags):
+                # 为防止误判，快速扫一眼页面上到底有没有超过 4 个字的中文字符串（排除系统垃圾词）
+                quick_elements = driver.find_elements(By.XPATH, "//div[string-length(text())>4]")
+                valid_count = 0
+                for el in quick_elements:
+                    if not is_junk_text(el.text):
+                        valid_count += 1
+                        break  # 只要发现1条真评论，就解除警报
+
+                if valid_count == 0:
+                    print(f"[线程-{worker_id}] ✂️ 触发剪枝：未检测到有效文本评论，瞬间关闭浏览器。")
+                    return "Error: ❌ 抓取终止：该商品暂无有效的用户文字评论（可能仅有系统默认好评，或全部被折叠）。", product_title, sales_volume
+        except Exception as e:
+            pass  # 探测失败也不影响主流程，当作正常情况继续
+        # ==========================================
 
         # === 优化 XPath 查找范围 ===
         # 尝试找到评论区的“根节点”，如果找不到就用 driver (全文查找)
@@ -229,17 +269,15 @@ def run_spider(target_url, worker_id=1):
         except:
             pass
 
-        # === 极速采集循环 ===
-        comments = []
         seen_hashes = set()
         last_comment_count = 0
         stuck_count = 0
 
         for i in range(50):
             # 优化查找范围：使用 driver.find_elements
-            # 这里的 XPath "//div" 是全文查找。
-            # 如果我们能定位到 root_element，可以用 root_element.find_elements(By.XPATH, ".//div...") (注意前面的点)
-            # 但考虑到兼容性，这里我们保持 "//div"，但在处理时增加日期提取
+            #  XPath "//div" 是全文查找
+            # 如果能定位 root_element，用 root_element.find_elements(By.XPATH, ".//div...")
+            # 这里保持 "//div"，但在处理时增加日期提取
 
             elements = driver.find_elements(By.XPATH, "//div[string-length(text())>3]")
 
@@ -278,24 +316,55 @@ def run_spider(target_url, worker_id=1):
                 print(f"[线程-{worker_id}] 轮次 {i + 1} | 已采集: {current_count} | 新增: {new_added}")
 
             if elements:
-                last_element = elements[-1]
                 if new_added > 0:
                     stuck_count = 0
-                    scrolled = scroll_internal_panel(driver, last_element)
-                    if not scrolled:
-                        driver.execute_script("arguments[0].scrollIntoView(false);", last_element)
-                    time.sleep(random.uniform(SCROLL_PAUSE_MIN, SCROLL_PAUSE_MAX))
                 else:
                     stuck_count += 1
                     print(f"[线程-{worker_id}] ⚠️ 暂无新数据 ({stuck_count}/{MAX_STUCK_COUNT})")
                     if stuck_count >= MAX_STUCK_COUNT:
                         print(f"[线程-{worker_id}] 🛑 连续无更新，提前结束。")
                         break
-                    driver.execute_script("arguments[0].scrollIntoView(true);", last_element)
-                    time.sleep(1.5)
+
+                # 利用外层循环的 i，当 i 达到 3 时（即已经滑了3次），直接终止，不再继续滑动
+                if i >= 3:
+                    print(f"[线程-{worker_id}] 已达到最大滑动次数，停止滑动结算数据")
+                    break
+
+                # === 核心滑动逻辑 ===
+                scroll_script = """
+                                var scrolled = false;
+                                var maxArea = 0;
+                                var targetEl = null;
+                                var allElements = document.querySelectorAll('*');
+                                for (var i = 0; i < allElements.length; i++) {
+                                    var el = allElements[i];
+                                    var style = window.getComputedStyle(el);
+                                    if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+                                        var area = el.clientWidth * el.clientHeight;
+                                        if (area > maxArea) {
+                                            maxArea = area;
+                                            targetEl = el;
+                                        }
+                                    }
+                                }
+                                // 降低面积阈值，适配有些较窄的侧边栏评价弹窗
+                                if (targetEl && maxArea > 20000) { 
+                                    targetEl.scrollTop = targetEl.scrollHeight; 
+                                    scrolled = true;
+                                }
+                                // 【关键修复】：如果没找到内部滚动条，先检查页面有没有弹出层(弹窗评价)
+                                // 如果有弹窗，绝不滚动背后的 body，防止拉出产品参数导致死循环！
+                                if (!scrolled) {
+                                    var hasModal = document.querySelector('.overlay, [role="dialog"], [class*="dialog"], [class*="Modal"]');
+                                }
+                            """
+                driver.execute_script(scroll_script)
+
+                time.sleep(0.5)
+
             else:
                 driver.execute_script("window.scrollBy(0, 300);")
-                time.sleep(1)
+                time.sleep(0.5)
 
             last_comment_count = current_count
 
@@ -319,6 +388,6 @@ def run_spider(target_url, worker_id=1):
             df.drop_duplicates(subset=['content'], inplace=True)
             # 导出时包含 date 列
             df.to_csv(output_file, index=False, encoding='utf-8-sig', lineterminator='\r\n')
-            return output_file, product_title
+            return output_file, product_title, sales_volume
         else:
-            return "Error: 未采集到有效数据", None
+            return "Error: 未采集到有效数据", None, 0
