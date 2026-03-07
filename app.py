@@ -4,15 +4,17 @@ import re
 import datetime
 import streamlit as st
 import pandas as pd
+import altair as alt
 import concurrent.futures
 from dotenv import load_dotenv
 import db_manager
 from urllib.parse import urlparse, parse_qs
-import jieba
 import platform
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 import json
+import numpy as np
+from datetime import timedelta
 
 # 引入后端函数
 from crawler import run_spider, get_search_links
@@ -26,21 +28,31 @@ from analysis import (
 load_dotenv()
 db_manager.init_stats_db()
 default_key_from_env = os.getenv("ALIYUN_API_KEY")
+# default_key_from_env = ""
 
 st.set_page_config(page_title="基于AI的电商平台客户购买体验分析系统", page_icon="🛒", layout="wide")
 db_manager.init_db()
 
-# === CSS 样式注入：隐藏不需要的界面元素 ===
+# === CSS 样式注入：隐藏界面元素并极致压缩顶部空白 ===
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stAppDeployButton {display: none;}
-    .block-container { padding-top: 2rem; }
+
+    /* 核心修改 1：强行覆盖主容器的顶部内边距 */
+    [data-testid="block-container"] {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+    }
+
+    /* 核心修改 2：压缩顶部 Header 的隐形占位高度，但保留小箭头 */
+    [data-testid="stHeader"] {
+        height: 2.5rem !important;
+    }
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
-
 # ==========================================
 # === 用户认证与额度管理系统 ===
 # ==========================================
@@ -65,7 +77,7 @@ if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'auth_page' not in st.session_state: st.session_state.auth_page = 'login'
 if 'users_db' not in st.session_state:
     st.session_state.users_db = {
-        'admin': get_new_user_template('admin123', '管理员')
+        'admin': get_new_user_template('123456', '管理员')
     }
 if 'current_user' not in st.session_state: st.session_state.current_user = None
 if 'current_user_id' not in st.session_state: st.session_state.current_user_id = None
@@ -84,7 +96,7 @@ if not st.session_state.logged_in:
         if st.session_state.auth_page == 'login':
             st.title("🔐 系统登录")
             login_user = st.text_input("用户名", value="admin")
-            login_pwd = st.text_input("密码", value="admin123", type="password")
+            login_pwd = st.text_input("密码", value="123456", type="password")
 
             if st.button("登录", type="primary", use_container_width=True):
                 # 接收三个返回值：成功标志, user_id, 角色
@@ -168,8 +180,28 @@ with st.sidebar:
         st.markdown(f"**今日免费额度 (10次/日):**\n- 🕷️ 爬虫: {spider_cnt}/10\n- 🧠 AI: {ai_cnt}/10")
 
     if st.button("🚪 退出登录"):
+        # 1. 彻底清空当前会话的所有缓存数据，防止不同账号数据串线
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+
+        # 2. 重新初始化最基础的未登录状态
         st.session_state.logged_in = False
+        st.session_state.auth_page = 'login'
+        st.session_state.current_page = 'main'
+
+        # 3. 刷新页面
         st.rerun()
+
+
+    # === 【管理员专属：全局后台入口】 ===
+    if role == '管理员':
+        st.markdown("---")
+        st.header("🛠️ 系统全局管理")
+        admin_btn_label = "🏠 返回分析大厅" if st.session_state.current_page == 'admin' else "🎛️ 进入后台"
+
+        if st.button(admin_btn_label, use_container_width=True, type="primary"):
+            st.session_state.current_page = 'admin' if st.session_state.current_page != 'admin' else 'main'
+            st.rerun()
 
     st.markdown("---")
 
@@ -182,32 +214,12 @@ with st.sidebar:
 
         if st.button(btn_label, use_container_width=True, type="primary"):
             # 切换状态并刷新页面
-            st.session_state.current_page = 'history' if st.session_state.current_page == 'main' else 'main'
+            st.session_state.current_page = 'main' if st.session_state.current_page == 'history' else 'history'
             st.rerun()
 
-    st.markdown("---")
-    st.header("⚙️ 智能配置")
+    if role != '客户': st.markdown("---")
 
-    # --- 2. API Key 隔离逻辑 ---
-    user_api_key = default_key_from_env
-    if role == '客户':
-        st.success("✅ 正在使用系统默认 API Key")
-    elif role == '商家':
-        if ai_cnt >= 10:
-            st.warning("⚠️ 今日免费额度已用尽，需配置自有 Key")
-            user_api_key = st.text_input("API Key", value="", type="password", placeholder="请输入您的 API Key")
-        else:
-            st.success("✅ 正在使用系统自带的免费 API Key")
-            st.caption("提示：也可提前配置您自己的 API Key 解除限制")
-            custom_key = st.text_input("自定义 API Key (选填)", value="", type="password")
-            if custom_key: user_api_key = custom_key
-    elif role == '管理员':
-        st.success("✅ 管理员无限畅享")
-        user_api_key = default_key_from_env or st.text_input("系统 API Key 兜底", type="password")
-
-    st.markdown("---")
-
-    # --- 3. 模型选择 ---
+    # --- 2. 模型选择 ---
     st.header("🧠 AI 模型选择")
     selected_model = st.selectbox(
         "选择分析模型",
@@ -222,9 +234,34 @@ with st.sidebar:
         index=0
     )
 
+    if role == '商家': st.markdown("---")
+
+    # --- 3. API Key 隔离逻辑 ---
+    user_api_key = default_key_from_env
+    if role != '管理员':
+        if role == '商家':
+            st.header("⚙️ 智能配置")
+            if ai_cnt >= 10:
+                st.warning("⚠️ 今日免费额度已用尽，需配置自有 Key")
+                user_api_key = st.text_input("API Key", value="", type="password", placeholder="请输入您的 API Key")
+            else:
+                st.success("正在使用系统自带的免费 API Key")
+                st.caption("提示：也可提前配置您自己的 API Key 解除限制")
+                custom_key = st.text_input("自定义 API Key (选填)", value="", type="password")
+                if custom_key: user_api_key = custom_key
+
+    else:
+        # 【极客细节】：管理员平时什么都看不到，直接静默使用 default_key_from_env。
+        # 但如果你的 .env 文件里忘记配 ALIYUN_API_KEY 了，才会弹出这个兜底输入框防止程序崩溃。
+        if not default_key_from_env:
+            st.error("🚨 系统环境变量缺失 API Key！")
+            user_api_key = st.text_input("系统 API Key 兜底配置 (仅管理员可见)", type="password")
+
     st.markdown("---")
+
+
     if st.button("🗑️ 清空当前页面记录"):
-        keys_to_keep = ['logged_in', 'auth_page', 'users_db', 'current_user', 'current_role']
+        keys_to_keep = ['logged_in', 'auth_page', 'users_db', 'current_user', 'current_role', 'current_user_id']
         for k in list(st.session_state.keys()):
             if k not in keys_to_keep:
                 del st.session_state[k]
@@ -234,76 +271,339 @@ with st.sidebar:
 # === 独立页面：历史记录看板 ===
 # ==========================================
 if st.session_state.current_page == 'history':
-    st.title("📈 商家历史数据看板")
+    st.title(f"📈 {st.session_state.current_role}历史数据看板")
 
     import db_manager
 
-    history_products = db_manager.get_merchant_products(st.session_state.current_user_id)
+    # 【新增】：将页面拆分为“可视化分析”和“数据大盘管理”两个标签页
+    tab_view, tab_edit = st.tabs(["📊 可视化走势分析", "✍️ 我的数据大盘 (增删改查)"])
 
-    if not history_products:
-        st.info("📭 暂无历史记录。请先在分析大厅抓取单品数据，AI 分析后会自动保存。")
-    else:
-        selected_item = st.selectbox(
-            "📌 选择要查阅的商品",
-            history_products,
-            # format_func 决定了下拉框里展示什么字：显示"标题 (ID: xxx)"
-            format_func=lambda x: f"{x[1]} (ID: {x[0]})"
+    with tab_view:
+        history_products = db_manager.get_merchant_products(st.session_state.current_user_id)
+
+        if not history_products:
+            st.info("📭 暂无历史记录。请先在分析大厅抓取单品数据，AI 分析后会自动保存。")
+        else:
+            selected_item = st.selectbox(
+                "📌 选择要查阅的商品",
+                history_products,
+                format_func=lambda x: f"{x[1]} (ID: {x[0]})"
+            )
+
+            if selected_item:
+                product_id = selected_item[0]
+                trend_df = db_manager.get_product_trend(st.session_state.current_user_id, product_id)
+
+                if not trend_df.empty:
+                    st.markdown("---")
+                    trend_df.set_index('日期', inplace=True)
+                    trend_df_sorted = trend_df.sort_index()
+
+                    if len(trend_df_sorted) >= 2:
+                        curr_sales = trend_df_sorted['销量'].iloc[-1]
+                        prev_sales = trend_df_sorted['销量'].iloc[-2]
+                        if prev_sales > 0:
+                            growth_rate = ((curr_sales - prev_sales) / prev_sales) * 100
+                            st.subheader("📊 销量核心指标监控")
+                            col_m1, col_m2 = st.columns(2)
+                            with col_m1:
+                                st.metric(label="最新记录销量", value=f"{curr_sales} 单", delta=f"{growth_rate:.2f}%")
+
+                            if growth_rate < 10.0:
+                                st.warning(
+                                    f"⚠️ **销量增长预警！** 最近一期销量较上期增长仅为 {growth_rate:.2f}%，低于 10% 阈值！",
+                                    icon="🚨")
+                            else:
+                                st.success(f"📈 销量增长健康！近期增长率为 {growth_rate:.2f}%。", icon="✅")
+                            st.markdown("---")
+
+                    plot_df = trend_df_sorted.reset_index().copy()
+                    plot_df['数据类型'] = '历史实测'
+
+                    combined_df = plot_df.copy()
+
+                    # 只有当历史数据 >= 3 条时，才进行有意义的预测
+                    if len(plot_df) >= 3:
+                        try:
+                            # 将日期字符串转为时间对象，再转为连续的数字序号（用于线性拟合）
+                            plot_df['date_obj'] = pd.to_datetime(plot_df['日期'])
+                            plot_df['date_num'] = plot_df['date_obj'].map(lambda x: x.toordinal())
+
+                            # 1. 拟合销量趋势 (1维多项式 = 直线)
+                            z_sales = np.polyfit(plot_df['date_num'], plot_df['销量'], 1)
+                            p_sales = np.poly1d(z_sales)
+
+                            # 2. 拟合好评率趋势
+                            z_rate = np.polyfit(plot_df['date_num'], plot_df['预估好评率'], 1)
+                            p_rate = np.poly1d(z_rate)
+
+                            # 3. 生成未来 5 天的虚拟日期
+                            last_date = plot_df['date_obj'].iloc[-1]
+                            future_dates = [last_date + timedelta(days=i) for i in range(1, 6)]
+
+                            pred_data = []
+                            for d in future_dates:
+                                d_num = d.toordinal()
+                                # 预测销量并兜底（不能跌穿 0）
+                                pred_sales = max(0, int(p_sales(d_num)))
+                                # 预测好评率并卡死在 0% ~ 100% 之间
+                                pred_rate = max(0.0, min(100.0, round(p_rate(d_num), 2)))
+
+                                pred_data.append({
+                                    '日期': d.strftime('%Y-%m-%d'),
+                                    '销量': pred_sales,
+                                    '预估好评率': pred_rate,
+                                    '数据类型': 'AI趋势预测'
+                                })
+
+                            pred_df = pd.DataFrame(pred_data)
+
+                            # 【视觉优化】：把历史最后一天的数据复制一份标记为"预测起点"
+                            # 这样在图表上，历史实线和预测虚线就能无缝连接起来！
+                            connection_point = plot_df.iloc[-1:].copy()
+                            connection_point['数据类型'] = 'AI趋势预测'
+
+                            combined_df = pd.concat([plot_df.drop(columns=['date_obj', 'date_num']),
+                                                     connection_point.drop(columns=['date_obj', 'date_num']),
+                                                     pred_df], ignore_index=True)
+                        except Exception as e:
+                            st.warning(f"数据波动异常，暂时无法生成预测折线：{e}")
+                    # ==========================================
+
+                    st.markdown("### 📈 数据走势与未来预测")
+                    st.caption("实线为真实历史数据；虚线为 AI 根据历史线性拟合推演的未来 5 天趋势。")
+
+                    # ==========================================
+                    # 🚀 新增交互规则：仅允许 X 轴(左右)平移，彻底禁用鼠标滚轮缩放
+                    # ==========================================
+                    pan_only = alt.selection_interval(bind='scales', encodings=['x'], zoom=False)
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        c1_base = alt.Chart(combined_df).mark_line(point=True).encode(
+                            x=alt.X('日期:N', title=""),
+                            y=alt.Y('销量:Q', title="", scale=alt.Scale(zero=False)),
+                            color=alt.Color('数据类型:N', scale=alt.Scale(domain=['历史实测', 'AI趋势预测'],
+                                                                          range=['#4c78a8', '#f58518'])),
+                            strokeDash=alt.StrokeDash('数据类型:N', scale=alt.Scale(domain=['历史实测', 'AI趋势预测'],
+                                                                                    range=[[1, 0], [5, 5]]),
+                                                      legend=None),
+                            tooltip=['日期', '销量', '数据类型']
+                        )
+                        # 兼容不同版本的 Altair 语法，替换掉粗暴的 .interactive()
+                        c1 = c1_base.add_params(pan_only) if hasattr(c1_base, 'add_params') else c1_base.add_selection(
+                            pan_only)
+                        st.altair_chart(c1, use_container_width=True)
+
+                    with col2:
+                        c2_base = alt.Chart(combined_df).mark_line(point=True).encode(
+                            x=alt.X('日期:N', title=""),
+                            y=alt.Y('预估好评率:Q', title="", scale=alt.Scale(zero=False)),
+                            color=alt.Color('数据类型:N', scale=alt.Scale(domain=['历史实测', 'AI趋势预测'],
+                                                                          range=['#FF4B4B', '#f58518'])),
+                            strokeDash=alt.StrokeDash('数据类型:N', scale=alt.Scale(domain=['历史实测', 'AI趋势预测'],
+                                                                                    range=[[1, 0], [5, 5]]),
+                                                      legend=None),
+                            tooltip=['日期', '预估好评率', '数据类型']
+                        )
+                        # 同上，注入防缩放的交互规则
+                        c2 = c2_base.add_params(pan_only) if hasattr(c2_base, 'add_params') else c2_base.add_selection(
+                            pan_only)
+                        st.altair_chart(c2, use_container_width=True)
+
+                    st.markdown("### 📝 详细数据明细 (含预测数据)")
+                    # 表格展示预测合并后的数据
+                    st.dataframe(combined_df, use_container_width=True)
+
+                    st.download_button(
+                        label="📥 下载该商品历史及预测数据 (.csv)",
+                        data=combined_df.to_csv(index=False).encode('utf-8-sig'),
+                        file_name=f"{selected_item}_trend_prediction.csv",
+                        mime='text/csv'
+                    )
+
+    # 【新增】：管理员/商家的增删改查后台
+    with tab_edit:
+        st.subheader("📝 管理我的所有追踪记录")
+        st.caption("提示：双击单元格即可修改数据。选中行按 Delete 键可删除。点击底部加号可手动伪造/新增记录。")
+
+        # 获取当前商家独有的全部数据
+        df_my_stats = db_manager.get_merchant_product_stats(st.session_state.current_user_id)
+
+        # --- 【修改点】：增加左右分栏结构，右侧放置蓝色的搜索按钮 ---
+        col_search_input, col_search_btn = st.columns([5, 1])
+
+        with col_search_input:
+            search_my_pid = st.text_input(
+                "搜索商品ID",  # 这个是必填项，但下面一行会把它隐藏掉
+                placeholder="🔍 筛选商品 ID (支持模糊查询)",  # 💡 提示文字放到了这里
+                label_visibility="collapsed",  # 💡 彻底隐藏上方的文字标签和留白
+                key="search_merchant_pid"
+            )
+
+        with col_search_btn:
+            st.button("搜索", type="primary", use_container_width=True)
+
+        filtered_my_stats = df_my_stats.copy()
+        if search_my_pid:
+            # 采用模糊匹配，输入几个数字就能搜出来
+            filtered_my_stats = filtered_my_stats[
+                filtered_my_stats['product_id'].astype(str).str.contains(search_my_pid.strip(), case=False,
+                                                                         na=False)
+            ]
+        # -----------------------------
+
+        edited_my_stats = st.data_editor(
+            filtered_my_stats,  # 传入过滤后的表格
+            num_rows="dynamic",
+            disabled=["id", "user_id"],
+            use_container_width=True,
+            key="merchant_stat_editor",
+            column_config={
+                "id": "记录ID",
+                "user_id": "我的个人 ID",
+                "product_id": "商品 ID",
+                "product_name": "商品名称",
+                "record_date": "记录日期",
+                "sales_volume": "销量记录",
+                "positive_rate": "预估好评率 (%)"
+            }
         )
 
-        if selected_item:
-            product_id = selected_item[0]
-            trend_df = db_manager.get_product_trend(st.session_state.current_user_id, product_id)
-
-            if not trend_df.empty:
-                st.markdown("---")
-                trend_df.set_index('日期', inplace=True)
-
-                trend_df_sorted = trend_df.sort_index()  # 确保日期按时间正序排列
-                if len(trend_df_sorted) >= 2:  # 至少要有两条数据才能算增长率
-                    curr_sales = trend_df_sorted['销量'].iloc[-1]
-                    prev_sales = trend_df_sorted['销量'].iloc[-2]
-
-                    if prev_sales > 0:
-                        growth_rate = ((curr_sales - prev_sales) / prev_sales) * 100
-                        st.subheader("📊 销量核心指标监控")
-                        col_m1, col_m2 = st.columns(2)
-                        with col_m1:
-                            st.metric(label="最新记录销量", value=f"{curr_sales} 单", delta=f"{growth_rate:.2f}%")
-
-                        # 触发预警逻辑
-                        if growth_rate < 10.0:
-                            st.warning(
-                                f"⚠️ **销量增长预警！** 最近一期销量较上期增长仅为 {growth_rate:.2f}%，低于 10% 阈值！",
-                                icon="🚨")
-                        else:
-                            st.success(f"📈 销量增长健康！近期增长率为 {growth_rate:.2f}%。", icon="✅")
-                        st.markdown("---")
-
-                # 1. 宽幅折线图展示区
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.subheader("📅 历史销量走势")
-                    st.line_chart(trend_df[['销量']], use_container_width=True)
-                with col2:
-                    st.subheader("⭐ 预估好评率走势 (%)")
-                    st.line_chart(trend_df[['预估好评率']], color="#FF4B4B", use_container_width=True)
-
-                # 2. 原始数据表格展示区
-                st.markdown("### 📝 详细数据明细")
-                # 把日期索引重置回来，方便表格展示
-                display_df = trend_df.reset_index()
-                st.dataframe(display_df, use_container_width=True)
-
-                # 3. 下载历史数据按钮
-                st.download_button(
-                    label="📥 下载该商品历史记录 (.csv)",
-                    data=display_df.to_csv(index=False).encode('utf-8-sig'),
-                    file_name=f"{selected_item}_history.csv",
-                    mime='text/csv'
-                )
+        if st.button("💾 确认并覆盖我的数据", type="primary"):
+            # 【关键修改】：同时传入编辑后的数据和过滤前的原始数据，用于精准比对防止误删
+            db_manager.sync_merchant_product_stats(edited_my_stats, filtered_my_stats,
+                                                   st.session_state.current_user_id)
+            st.toast("您的历史数据更新成功！")
+            st.rerun()
 
     # 执行到这里直接停止，不再向下渲染“分析大厅”的代码
     st.stop()
+
+if st.session_state.current_page == 'admin':
+    # 强制安全校验
+    if st.session_state.current_role != '管理员':
+        st.error("🚨 越权访问拦截：您不是管理员！")
+        st.stop()
+
+    st.title("🎛️ 系统管理员全局控制台")
+    st.caption("提示：在表格中双击单元格即可修改数据。选中行按 Delete 键可删除。点击底部加号可新增。")
+
+    tab_users, tab_stats = st.tabs(["👥 账号权限与额度管控", "📊 平台所有分析数据调控"])
+
+    with tab_users:
+        st.subheader("全局用户表")
+        df_users = db_manager.get_all_users_admin()
+
+        # --- 新增：用户表的搜索过滤功能 (UI优化 + 模糊查询) ---
+        col_u_search1, col_u_search2, col_u_btn = st.columns([4, 4, 1])
+        with col_u_search1:
+            search_u_id = st.text_input("搜索用户ID", placeholder="🔍 筛选用户 ID (模糊查询)",
+                                        label_visibility="collapsed", key="search_u_id_input")
+        with col_u_search2:
+            search_u_name = st.text_input("搜索用户名", placeholder="🔍 搜索用户名 (模糊查询)",
+                                          label_visibility="collapsed", key="search_u_name_input")
+        with col_u_btn:
+            st.button("🔍 搜索", key="btn_u_search", type="primary", use_container_width=True)
+
+        # 复制一份 DataFrame 用于过滤
+        filtered_users_df = df_users.copy()
+
+        # 1. 按 ID 过滤 (模糊匹配)
+        if search_u_id:
+            filtered_users_df = filtered_users_df[
+                filtered_users_df['id'].astype(str).str.contains(search_u_id.strip(), case=False, na=False)
+            ]
+
+        # 2. 按用户名过滤 (模糊匹配，大小写不敏感)
+        if search_u_name:
+            filtered_users_df = filtered_users_df[
+                filtered_users_df['username'].astype(str).str.contains(search_u_name.strip(), case=False, na=False)
+            ]
+        # ---------------------------------
+
+        # 使用 st.data_editor 开启交互式表格，传入过滤后的 DataFrame
+        edited_users = st.data_editor(
+            filtered_users_df,
+            num_rows="dynamic",
+            disabled=["id"],
+            use_container_width=True,
+            key="admin_user_editor",
+            # 👇 新增：配置显示列名 (底层还是英文，只改UI显示)
+            column_config={
+                "username": "用户名",
+                "role": "角色权限",
+                "last_date": "最后活跃/重置日期",
+                "spider_count": "爬虫已用次数",
+                "ai_count": "AI已用次数",
+                "dl_count": "下载已用次数"
+            }
+        )
+
+        if st.button("💾 确认并覆盖显示的用户数据", type="primary"):
+            # 传入编辑后的表格 edited_users，以及过滤后的原始表格 filtered_users_df
+            db_manager.sync_users_admin(edited_users, filtered_users_df)
+            st.toast("用户数据同步完成！")
+            st.rerun()
+
+    with tab_stats:
+        st.subheader("全局商品追踪记录")
+        df_stats = db_manager.get_all_product_stats_admin()
+
+        # --- 增加：联合查询过滤功能 (UI优化 + 模糊查询) ---
+        col_search1, col_search2, col_btn = st.columns([4, 4, 1])
+        with col_search1:
+            search_uid = st.text_input("筛选用户ID", placeholder="🔍 筛选用户 ID (模糊查询)",
+                                       label_visibility="collapsed", key="search_stats_uid_input")
+        with col_search2:
+            search_pid = st.text_input("筛选商品ID", placeholder="🔍 筛选商品 ID (模糊查询)",
+                                       label_visibility="collapsed", key="search_stats_pid_input")
+        with col_btn:
+            st.button("🔍 搜索", key="btn_stats_search", type="primary", use_container_width=True)
+
+        # 根据搜索框内容过滤 DataFrame
+        filtered_df = df_stats.copy()
+
+        # 1. 筛选用户 ID (🔥 已升级为模糊匹配)
+        if search_uid:
+            filtered_df = filtered_df[
+                filtered_df['user_id'].astype(str).str.contains(search_uid.strip(), case=False, na=False)
+            ]
+
+        # 2. 筛选商品 ID (🔥 已升级为模糊匹配)
+        if search_pid:
+            filtered_df = filtered_df[
+                filtered_df['product_id'].astype(str).str.contains(search_pid.strip(), case=False, na=False)
+            ]
+        # -----------------------------
+
+        edited_stats = st.data_editor(
+            filtered_df,
+            num_rows="dynamic",
+            disabled=["id"],
+            use_container_width=True,
+            key="admin_stat_editor",
+            # 👇 新增：配置显示列名
+            column_config={
+                "user_id": "所属用户 ID",
+                "product_id": "商品 ID",
+                "product_name": "商品名称",
+                "record_date": "记录日期",
+                "sales_volume": "销量记录",
+                "positive_rate": "预估好评率 (%)"
+            }
+        )
+
+        if st.button("💾 确认并覆盖当前显示的商品数据", type="primary"):
+            # 传入编辑后的表格 edited_stats，以及过滤后的原始表格 filtered_df
+            db_manager.sync_product_stats_admin(edited_stats, filtered_df)
+            st.toast("✅ 商品历史数据同步完成！")
+            st.rerun()
+
+    # 执行到这里停止，阻止渲染主页内容
+    st.stop()
+
 
 st.title("🛒 基于AI的电商平台客户购买体验分析系统")
 
@@ -321,7 +621,7 @@ if 'processing_comp' not in st.session_state: st.session_state.processing_comp =
 def can_use_spider():
     if role == '管理员': return True
     if role == '客户' and spider_cnt >= 3: return False
-    if role == '商家' and spider_cnt >= 10 and not user_api_key: return False
+    if role == '商家' and spider_cnt >= 10: return False
     return True
 
 
@@ -373,36 +673,205 @@ def extract_product_id(url):
     return "未知ID"
 
 
-import json  # 确保顶部引入了 json
-
-
-def generate_wordcloud_image(word_freq_dict):
-    """直接接收 AI 提取的词频字典画图，抛弃原始的 jieba 分词"""
-
+# ==========================================
+# === 优化后的深色系映射画图函数 ===
+# ==========================================
+def generate_wordcloud_image(word_freq_dict, theme='positive'):
+    """直接接收 AI 提取的词频字典画图，支持【权重越高，颜色越深】的动态映射"""
     sys_type = platform.system()
     if sys_type == "Windows":
-        font_path = "C:/Windows/Fonts/simhei.ttf"  # 黑体
+        font_path = "C:/Windows/Fonts/simhei.ttf"
     elif sys_type == "Darwin":
         font_path = "/System/Library/Fonts/PingFang.ttc"
     else:
         font_path = None
 
-    # 核心改变：不再使用 generate(text)，而是使用 generate_from_frequencies(dict)
+    # 1. 先使用默认配置创建 WordCloud 对象，让其计算出合理的字体大小
     wc = WordCloud(
         font_path=font_path,
         width=800, height=400,
         background_color='white',
-        colormap='magma',
         max_words=80
     ).generate_from_frequencies(word_freq_dict)
 
+    # 2. 从计算好的 wc 对象中获取最大和最小字体大小，用于后续映射
+    current_font_sizes = [v[1] for v in wc.layout_]
+    if current_font_sizes:
+        max_font = max(current_font_sizes)
+        min_font = min(current_font_sizes)
+    else:
+        # 兜底方案
+        max_font = 100
+        min_font = 10
+
+    # 3. 【核心创新】：定义动态颜色映射函数
+    # 利用闭包特性，将 max_font 和 min_font 传入函数内部
+    def dynamic_deep_color_func(word, font_size, position, orientation, random_state=None, **kwargs):
+        """
+        根据字体大小（权重）动态计算颜色深浅。
+        权重越大 (font_size 大) -> 亮度 (Lightness) 越低 -> 颜色越深。
+        """
+        # 防止分母为 0
+        if max_font == min_font:
+            normalized_size = 1.0
+        else:
+            # 将当前字体大小标准化到 0.0 - 1.0 的区间
+            normalized_size = (font_size - min_font) / (max_font - min_font)
+
+        # 定义亮度的映射区间 (HSL 中的 L)
+        # 我们需要亮度在 [深色] 和 [中等深色] 之间变化，绝对不出现看不清的浅色
+        # 这里使用标准化的二次方 (normalized_size ** 2) 来增加权重的对比度
+        # 权重最大时 normalized_size=1 -> 亮度 L=15% (极深)
+        # 权重最小时 normalized_size=0 -> 亮度 L=40% (可见的中等深色)
+        lightness = 40 - (normalized_size ** 2) * 25  # 亮度区间在 15% - 40% 之间
+
+        # 饱和度 (Saturation) 保持高饱和，确保色彩浓郁
+        saturation = 90  # 90%
+
+        # 色相 (Hue) 根据主题确定
+        if theme == 'positive':
+            hue = 120  # 标准绿色
+        else:
+            hue = 0  # 标准红色 (或者 360)
+
+        # 返回 HSL 格式颜色字符串
+        return f"hsl({hue}, {saturation}%, {int(lightness)}%)"
+
+    # 4. 【极其关键】：将计算好的动态颜色函数应用到 wc 对象上
+    # 这一步必须在 generate_from_frequencies 之后进行，因为需要用到 layout_ 数据
+    wc.recolor(color_func=dynamic_deep_color_func)
+
+    # 5. 渲染成图
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.imshow(wc, interpolation='bilinear')
     ax.axis('off')
     plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
     plt.margins(0, 0)
-
     return fig
+
+
+def _update_wordclouds(data, pos_data, neg_data):
+    """辅助函数4.0：递归查找+极致模糊匹配键名，专治各种嵌套和奇葩命名"""
+    if isinstance(data, list):
+        for item in data:
+            _update_wordclouds(item, pos_data, neg_data)
+        return
+
+    if not isinstance(data, dict):
+        return
+
+    for k, v in data.items():
+        k_lower = str(k).lower()
+
+        # 1. 极致模糊匹配键名 (涵盖了中英文的各种可能)
+        target = None
+        if any(w in k_lower for w in ["positive", "好评", "正面", "优点", "优势", "亮点", "满意", "好词"]):
+            target = pos_data
+        elif any(w in k_lower for w in
+                 ["negative", "差评", "痛点", "缺点", "劣势", "不足", "抱怨", "吐槽", "负面", "坏词"]):
+            target = neg_data
+
+        if target is not None:
+            # 2. 找到了目标，开始强行提取里面的特征和权重
+            if isinstance(v, dict):
+                for sub_k, sub_v in v.items():
+                    try:
+                        target[str(sub_k)] = float(sub_v)
+                    except:
+                        pass
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict):
+                        keys = list(item.keys())
+                        if len(keys) >= 2:
+                            try:
+                                target[str(item[keys[0]])] = float(item[keys[1]])
+                            except:
+                                pass
+                        elif len(keys) == 1:
+                            try:
+                                target[str(keys[0])] = float(item[keys[0]])
+                            except:
+                                pass
+        else:
+            # 3. 如果当前 key 不是目标，但它的值是个字典或列表，可能是被 AI 嵌套在深层了，继续递归往下找！
+            if isinstance(v, (dict, list)):
+                _update_wordclouds(v, pos_data, neg_data)
+
+
+def extract_dual_wordclouds(text):
+    """终极鲁棒提取器 4.0：采用词法分析深搜，完美兼容纯文本混排与缺失代码块"""
+    pos_data, neg_data = {}, {}
+    blocks_to_try = []
+
+    # 策略 1：标准的 Markdown JSON 提取
+    blocks_to_try.extend(re.findall(r'`{3}(?:json)?\s*(.*?)\s*`{3}', text, re.DOTALL | re.IGNORECASE))
+
+    # 策略 2：基于括号深度的精准剥离法（专治 DeepSeek/豆包 的纯文本 JSON 混排）
+    start_idx = 0
+    while True:
+        # 寻找下一个潜在大括号的起点
+        start = text.find('{', start_idx)
+        if start == -1:
+            break
+
+        # 往后匹配成对的括号，同时规避字符串内部的干扰括号
+        depth = 0
+        in_string = False
+        escape = False
+        end = -1
+
+        for i in range(start, len(text)):
+            char = text[i]
+
+            # 处理转义符，防止字符串内有类似 \" 的干扰
+            if escape:
+                escape = False
+                continue
+            if char == '\\':
+                escape = True
+                continue
+            # 记录是否进入了双引号内部
+            if char == '"':
+                in_string = not in_string
+                continue
+
+            # 只有在不在字符串内部时，才计算括号深度
+            if not in_string:
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    # 当深度归零，说明成功捕获了一个完整的顶层 JSON 对象
+                    if depth == 0:
+                        end = i
+                        break
+
+        if end != -1:
+            # 捕获成功，装入待解析列表，并把扫描指针移动到该对象的后方
+            blocks_to_try.append(text[start:end + 1])
+            start_idx = end + 1
+        else:
+            # 如果没找到闭合，可能存在截断，步进跳过
+            start_idx = start + 1
+
+    # 遍历所有被剥离出来的块，交由 update 函数处理
+    for block in blocks_to_try:
+        block = block.strip()
+        if not block: continue
+        try:
+            data = json.loads(block)
+            _update_wordclouds(data, pos_data, neg_data)
+        except json.JSONDecodeError:
+            # 兼容极少数模型输出丢了最外层括号的残缺 JSON
+            try:
+                fixed_block = "{" + block + "}" if not block.startswith("{") else block
+                data = json.loads(fixed_block)
+                _update_wordclouds(data, pos_data, neg_data)
+            except:
+                pass
+
+    return pos_data, neg_data
 
 trigger_search = start_analysis or (user_input and user_input != st.session_state.last_query)
 
@@ -471,7 +940,7 @@ if trigger_search:
                     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                         futures = [executor.submit(run_spider, link, i + 1) for i, link in enumerate(links)]
                         for f in concurrent.futures.as_completed(futures):
-                            res, title = f.result()
+                            res, title, _ = f.result()
                             if res and "Error" not in res:
                                 try:
                                     t_df = pd.read_csv(res, encoding='utf-8-sig')
@@ -516,12 +985,11 @@ if st.session_state.df_result is not None:
     if saved_rpt:
         st.info(f"当前展示的是 **{saved_mod}** 生成的报告")
 
-        # 1. 抹除用于画词云的 JSON 代码块
-        clean_report = re.sub(r'```json\s*\{.*?"wordcloud".*?\}\s*```', '', saved_rpt, flags=re.DOTALL)
+        # 1. 强力截断：找到第一个词云JSON的起点（包含可能存在的前置反引号），直接截断到全文末尾
+        clean_report = saved_rpt
+        clean_report = re.sub(r'\s*(?:`{3}(?:json)?\s*)?\{[^{]*?["\'](?:positive|negative)_wordcloud["\'][\s\S]*', '',
+                              clean_report, flags=re.IGNORECASE)
 
-        # ===============================================
-        # === 【终极版：兼容所有模型的 AI 思考折叠器】 ===
-        # ===============================================
         think_content = ""
 
         # 策略 1：寻找标准的 <think> 标签 (DeepSeek 等原生支持)
@@ -533,7 +1001,7 @@ if st.session_state.df_result is not None:
             clean_report = re.sub(r'<think>.*?</think>\n*', '', clean_report, flags=re.DOTALL | re.IGNORECASE)
         else:
             # 策略 2：兼容豆包等模型的自定义前缀文本
-            # 匹配逻辑：从 "🧠" 开始，一直抓取，直到遇到正式报告的标题（通常是换行后的 # 或 **）
+            # 匹配逻辑：从 "🧠" 开始，一直抓取，直到遇到正式报告的标题（通常是换行后的 #）
             alt_match = re.search(r'(🧠.*?)(?=\n#|\n---)', clean_report, flags=re.DOTALL)
             if alt_match:
                 think_content = alt_match.group(1).strip()
@@ -545,7 +1013,6 @@ if st.session_state.df_result is not None:
             with st.expander("🤔 查看 AI 深度思考逻辑", expanded=False):
                 st.caption("以下是 AI 总结报告前的数据梳理与推演过程：")
                 st.markdown(think_content)
-        # ===============================================
 
         # 2. 展示极其干净的报告干货
         st.markdown(clean_report.strip())
@@ -553,34 +1020,125 @@ if st.session_state.df_result is not None:
         # ===============================================
         # 从 session 的报告中解析 AI 词云字典并画图
         # ===============================================
-        if is_single and st.session_state.df_result is not None:
+        if st.session_state.df_result is not None:
             st.markdown("---")
             st.markdown("### ☁️ AI 提纯核心情感词云")
-            st.caption("基于 AI 深度理解提取的产品特征与情感关键词，告别无意义口语词。")
+            st.caption("基于 AI 深度理解提取的产品特征与情感关键词，上方为正面好评，下方为负面差评。")
             with st.spinner("正在绘制词云图..."):
                 try:
-                    # 使用正则提取出报告里的 JSON 字典
-                    match_json = re.search(r'```json\s*(\{.*?"wordcloud".*?\})\s*```', saved_rpt, re.DOTALL)
-                    if match_json:
-                        json_data = json.loads(match_json.group(1))
-                        word_freq_dict = json_data.get("wordcloud", {})
+                    # 调用刚才写的强力提取器
+                    pos_data, neg_data = extract_dual_wordclouds(saved_rpt)
 
-                        if word_freq_dict:
-                            fig = generate_wordcloud_image(word_freq_dict)
-                            st.pyplot(fig)
-                        else:
-                            st.warning("⚠️ 词云数据为空。")
+                    # 1. 先渲染正面词云 (在上)
+                    st.markdown("<h5 style='text-align: center; color: #2e7d32;'>🟢 正面特征词云</h5>",
+                                unsafe_allow_html=True)
+                    if pos_data:
+                        st.pyplot(generate_wordcloud_image(pos_data, theme='positive'))
                     else:
-                        st.info("📌 提示：本次 AI 报告未按格式返回词云数据，请尝试点击重新生成。")
+                        st.warning("未提取到正面数据")
+
+                    st.write("")  # 增加一点上下间距
+
+                    # 2. 再渲染负面词云 (在下)
+                    st.markdown("<h5 style='text-align: center; color: #c62828;'>🔴 负面特征词云</h5>",
+                                unsafe_allow_html=True)
+                    if neg_data:
+                        st.pyplot(generate_wordcloud_image(neg_data, theme='negative'))
+                    else:
+                        st.warning("未提取到负面数据")
                 except Exception as e:
                     st.error(f"词云渲染解析失败: {e}")
         # ===============================================
+        if st.session_state.df_result is not None and (pos_data or neg_data):
+            st.markdown("---")
+            st.markdown("### 📊 核心特征情感占比监控大屏")
+            st.caption("比例逆时针降序排列，颜色越深代表权重/频率越高。")
+
+            # 将字典转换为 DataFrame，只取 Top 10
+            df_pos = pd.DataFrame(list(pos_data.items()), columns=['特征', '权重']).nlargest(10,
+                                                                                             '权重') if pos_data else pd.DataFrame()
+            df_neg = pd.DataFrame(list(neg_data.items()), columns=['特征', '权重']).nlargest(10,
+                                                                                             '权重') if neg_data else pd.DataFrame()
+
+            # ---------------- 第一排：左饼图，右环形图 ----------------
+            col_pie1, col_pie2 = st.columns(2)
+
+            with col_pie1:
+                st.markdown("<h5 style='text-align: center; color: #2e7d32;'>🟢 Top 10 正面好评占比 (饼图)</h5>",
+                            unsafe_allow_html=True)
+                if not df_pos.empty:
+                    pie_chart = alt.Chart(df_pos).mark_arc(innerRadius=0, stroke="#fff").encode(
+                        theta=alt.Theta(field="权重", type="quantitative"),
+                        # 【关键1】强制按升序绘制，实现逆时针递减的视觉效果
+                        order=alt.Order(field="权重", type="quantitative", sort="ascending"),
+                        # 【关键2】Color绑定"特征"(显示文字图例)，同时按权重降序分色，reverse=True让权重最高的颜色最深
+                        color=alt.Color(field="特征", type="nominal",
+                                        sort=alt.SortField(field="权重", order="descending"),
+                                        scale=alt.Scale(scheme='greens', reverse=True),
+                                        legend=alt.Legend(title="好评特征")),  # 图例标题
+                        tooltip=['特征', '权重']
+                    ).properties(height=350)
+                    st.altair_chart(pie_chart, use_container_width=True)
+
+            with col_pie2:
+                st.markdown("<h5 style='text-align: center; color: #c62828;'>🔴 Top 10 负面痛点占比 (环形图)</h5>",
+                            unsafe_allow_html=True)
+                if not df_neg.empty:
+                    donut_chart = alt.Chart(df_neg).mark_arc(innerRadius=70, stroke="#fff").encode(
+                        theta=alt.Theta(field="权重", type="quantitative"),
+                        order=alt.Order(field="权重", type="quantitative", sort="ascending"),
+                        color=alt.Color(field="特征", type="nominal",
+                                        sort=alt.SortField(field="权重", order="descending"),
+                                        scale=alt.Scale(scheme='reds', reverse=True),
+                                        legend=alt.Legend(title="痛点特征")),  # 图例标题
+                        tooltip=['特征', '权重']
+                    ).properties(height=350)
+                    st.altair_chart(donut_chart, use_container_width=True)
+
+            # ---------------- 第二排：南丁格尔玫瑰图 ----------------
+            st.write("")  # 增加一些垂直间距
+            col_rose, col_empty = st.columns([1, 1])  # 玫瑰图放左侧，右侧留白
+
+            with col_rose:
+                st.markdown("<h5 style='text-align: center;'>🏵️ 核心痛点分布 (南丁格尔玫瑰图)</h5>",
+                            unsafe_allow_html=True)
+                st.caption("视觉重点：颜色最深、半径最长的扇形即为第一大痛点，一眼看穿严重程度。")
+                if not df_neg.empty:
+                    rose_chart = alt.Chart(df_neg).mark_arc(innerRadius=20, stroke="#fff").encode(
+                        # 角度：使用升序排列，让最大的扇形靠左（逆时针展开）
+                        theta=alt.Theta(field="特征", type="nominal",
+                                        sort=alt.SortField(field="权重", order="ascending")),
+
+                        # 半径：代表权重大小
+                        radius=alt.Radius(field="权重", type="quantitative",
+                                          scale=alt.Scale(type="sqrt", zero=True, rangeMin=20)),
+
+                        # 👇 核心修改：将Color映射给【特征】召唤出文字图例，并按权重降序+反转色带，实现深色绑定大权重
+                        color=alt.Color(field="特征", type="nominal",
+                                        sort=alt.SortField(field="权重", order="descending"),
+                                        scale=alt.Scale(scheme='redpurple', reverse=True),
+                                        legend=alt.Legend(title="痛点特征")),
+                        tooltip=['特征', '权重']
+                    ).properties(height=400)
+                    st.altair_chart(rose_chart, use_container_width=True)
+                else:
+                    st.info("📊 暂无负面痛点数据。")
 
         st.markdown("---")
-        btn_text = f"🔄 切换到 {selected_model} 并重新生成" if selected_model != saved_mod else "🔄 重新生成"
-        if st.button(btn_text, disabled=not can_use_ai() or st.session_state.processing_comp):
-            st.session_state[rpt_key] = None
-            st.rerun()
+        col_btn1, col_btn2 = st.columns(2)
+
+        with col_btn1:
+            # 仅触发页面重绘，保留 AI 原始数据，每次词云排版都会有一点随机的改变
+            if st.button("🎨 重新生成排版图表 (不耗AI额度)", use_container_width=True):
+                pass
+
+        with col_btn2:
+            btn_text = f"🔄 重新调用 AI 生成报告" if selected_model == saved_mod else f"🔄 切换 {selected_model} 重新生成"
+            # 这里会清空历史数据，强制重新调用 AI 接口
+            if st.button(btn_text, use_container_width=True,
+                         disabled=not can_use_ai() or st.session_state.processing_comp):
+                st.session_state[rpt_key] = None
+                st.rerun()
 
     else:
         gen_btn_text = "✨ 生成单品体验报告" if is_single else "✨ 生成市场趋势调研报告"
@@ -593,7 +1151,14 @@ if st.session_state.df_result is not None:
                 st.session_state[mod_key] = selected_model
 
                 if is_single:
-                    stream_gen = analyze_single_product_stream(comments, user_api_key, model=selected_model)
+                    sales = st.session_state.get('current_sales', 0)
+                    stream_gen = analyze_single_product_stream(
+                        product_name=st.session_state.product_info,  # 传入商品标题
+                        comments_list=comments,
+                        sales_volume=sales,  # 传入抓取到的销量
+                        api_key=user_api_key,
+                        model=selected_model
+                    )
                     full_report = st.write_stream(stream_gen)
                     st.session_state[rpt_key] = full_report
 
@@ -615,7 +1180,12 @@ if st.session_state.df_result is not None:
                     except Exception as e:
                         st.error(f"数据存档失败: {e}")
                 else:
-                    stream_gen = analyze_market_trends_stream(comments, user_api_key, model=selected_model)
+                    stream_gen = analyze_market_trends_stream(
+                        search_query=st.session_state.product_info,  # 传入搜索词
+                        comments_list=comments,
+                        api_key=user_api_key,
+                        model=selected_model
+                    )
                     st.session_state[rpt_key] = st.write_stream(stream_gen)
 
                 st.rerun()
@@ -647,13 +1217,85 @@ if st.session_state.df_result is not None:
                         st.success(f"📈 销量增长健康！当前增长率为 {growth_rate:.2f}%。", icon="✅")
                     st.markdown("###")  # 增加一点底部间距，让UI更好看
 
+            plot_df = trend_df_sorted.reset_index().copy()
+            plot_df['数据类型'] = '历史实测'
+
+            combined_df = plot_df.copy()
+
+            # 同样：满3条历史数据才触发预测
+            if len(plot_df) >= 3:
+                try:
+                    plot_df['date_obj'] = pd.to_datetime(plot_df['日期'])
+                    plot_df['date_num'] = plot_df['date_obj'].map(lambda x: x.toordinal())
+
+                    z_sales = np.polyfit(plot_df['date_num'], plot_df['销量'], 1)
+                    p_sales = np.poly1d(z_sales)
+
+                    z_rate = np.polyfit(plot_df['date_num'], plot_df['预估好评率'], 1)
+                    p_rate = np.poly1d(z_rate)
+
+                    last_date = plot_df['date_obj'].iloc[-1]
+                    future_dates = [last_date + timedelta(days=i) for i in range(1, 6)]
+
+                    pred_data = []
+                    for d in future_dates:
+                        d_num = d.toordinal()
+                        pred_sales = max(0, int(p_sales(d_num)))
+                        pred_rate = max(0.0, min(100.0, round(p_rate(d_num), 2)))
+
+                        pred_data.append({
+                            '日期': d.strftime('%Y-%m-%d'),
+                            '销量': pred_sales,
+                            '预估好评率': pred_rate,
+                            '数据类型': 'AI趋势预测'
+                        })
+
+                    pred_df = pd.DataFrame(pred_data)
+
+                    # 无缝连接点
+                    connection_point = plot_df.iloc[-1:].copy()
+                    connection_point['数据类型'] = 'AI趋势预测'
+
+                    combined_df = pd.concat([plot_df.drop(columns=['date_obj', 'date_num']),
+                                             connection_point.drop(columns=['date_obj', 'date_num']),
+                                             pred_df], ignore_index=True)
+                except Exception as e:
+                    st.warning(f"数据波动异常，暂时无法生成预测折线：{e}")
+
+            # 禁用缩放，仅允许 X 轴平移
+            pan_only = alt.selection_interval(bind='scales', encodings=['x'], zoom=False)
+
             col1, col2 = st.columns(2)
+
             with col1:
-                st.caption("📅 销量走势")
-                st.line_chart(trend_df[['销量']], use_container_width=True)
+                st.caption("📅 销量走势 (含AI未来5天推演)")
+                c1_base = alt.Chart(combined_df).mark_line(point=True).encode(
+                    x=alt.X('日期:N', title=""),
+                    y=alt.Y('销量:Q', title="", scale=alt.Scale(zero=False)),
+                    color=alt.Color('数据类型:N',
+                                    scale=alt.Scale(domain=['历史实测', 'AI趋势预测'], range=['#4c78a8', '#f58518']),
+                                    legend=alt.Legend(title="", orient="bottom")),
+                    strokeDash=alt.StrokeDash('数据类型:N', scale=alt.Scale(domain=['历史实测', 'AI趋势预测'],
+                                                                            range=[[1, 0], [5, 5]]), legend=None),
+                    tooltip=['日期', '销量', '数据类型']
+                )
+                c1 = c1_base.add_params(pan_only) if hasattr(c1_base, 'add_params') else c1_base.add_selection(pan_only)
+                st.altair_chart(c1, use_container_width=True)
+
             with col2:
                 st.caption("⭐ 好评率走势 (%)")
-                st.line_chart(trend_df[['预估好评率']], color="#FF4B4B", use_container_width=True)
+                c2_base = alt.Chart(combined_df).mark_line(point=True).encode(
+                    x=alt.X('日期:N', title=""),
+                    y=alt.Y('预估好评率:Q', title="", scale=alt.Scale(zero=False)),
+                    color=alt.Color('数据类型:N',
+                                    scale=alt.Scale(domain=['历史实测', 'AI趋势预测'], range=['#FF4B4B', '#f58518']),
+                                    legend=alt.Legend(title="", orient="bottom")),
+                    strokeDash=alt.StrokeDash('数据类型:N', scale=alt.Scale(domain=['历史实测', 'AI趋势预测'],
+                                                                            range=[[1, 0], [5, 5]]), legend=None),
+                    tooltip=['日期', '预估好评率', '数据类型']
+                )
+                c2 = c2_base.add_params(pan_only) if hasattr(c2_base, 'add_params') else c2_base.add_selection(pan_only)
+                st.altair_chart(c2, use_container_width=True)
 
     # === 竞品比对区 ===
     if is_single and st.session_state.report_single:
@@ -701,7 +1343,7 @@ if st.session_state.df_result is not None:
                         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                             results = list(executor.map(task_wrapper, task_args))
 
-                        for i, (res_file, _) in enumerate(results):
+                        for i, (res_file, _, _) in enumerate(results):
                             progress_bar.progress((i + 1) / len(comp_links))
                             if res_file and "Error" not in res_file:
                                 try:
@@ -763,4 +1405,159 @@ if st.session_state.df_result is not None:
                 st.markdown("---")
                 st.subheader("⚖️ 竞品差异化对比报告")
                 st.info(f"由模型 **{st.session_state.report_comp_model}** 生成")
-                st.markdown(st.session_state.report_comp)
+
+                # 强力抹除竞品报告正文里的 JSON 乱码 (完美解决 undefined 未闭合代码块问题)
+                clean_comp_report = st.session_state.report_comp
+                clean_comp_report = re.sub(
+                    r'\s*(?:`{3}(?:json)?\s*)?\{[^{]*?["\'](?:positive|negative)_wordcloud["\'][\s\S]*', '',
+                    clean_comp_report, flags=re.IGNORECASE)
+
+                # ================= 新增：提取并折叠深度思考过程 =================
+                think_content_comp = ""
+
+                # 策略 1：寻找标准的 <think> 标签 (DeepSeek 等原生支持)
+                think_match_comp = re.search(r'<think>(.*?)</think>', clean_comp_report,
+                                             flags=re.DOTALL | re.IGNORECASE)
+
+                if think_match_comp:
+                    think_content_comp = think_match_comp.group(1).strip()
+                    # 从正文中剔除
+                    clean_comp_report = re.sub(r'<think>.*?</think>\n*', '', clean_comp_report,
+                                               flags=re.DOTALL | re.IGNORECASE)
+                else:
+                    # 策略 2：兼容豆包等模型的自定义前缀文本
+                    alt_match_comp = re.search(r'(🧠.*?)(?=\n#|\n---)', clean_comp_report, flags=re.DOTALL)
+                    if alt_match_comp:
+                        think_content_comp = alt_match_comp.group(1).strip()
+                        # 从正文中精确剔除这段思考文本
+                        clean_comp_report = clean_comp_report.replace(alt_match_comp.group(0), "").strip()
+
+                # 如果成功抓到了思考内容，就把它装进折叠面板
+                if think_content_comp:
+                    with st.expander("🤔 查看 AI 深度思考逻辑", expanded=False):
+                        st.caption("以下是 AI 总结报告前的数据梳理与推演过程：")
+                        st.markdown(think_content_comp)
+                # ==============================================================
+
+                # 展示极其干净的报告干货正文
+                st.markdown(clean_comp_report.strip())
+
+                pos_data_c, neg_data_c = {}, {}
+
+                # 解析竞品的双词云
+                try:
+                    # 调用强力提取器
+                    pos_data_c, neg_data_c = extract_dual_wordclouds(st.session_state.report_comp)
+
+                    # 1. 先渲染优势词云 (在上)
+                    st.markdown("<h5 style='text-align: center; color: #2e7d32;'>🟢 本品核心优势词云</h5>",
+                                unsafe_allow_html=True)
+                    if pos_data_c:
+                        st.pyplot(generate_wordcloud_image(pos_data_c, theme='positive'))
+                    else:
+                        st.warning("未提取到优势数据")
+
+                    st.write("")  # 增加一点上下间距
+
+                    # 2. 再渲染劣势词云 (在下)
+                    st.markdown("<h5 style='text-align: center; color: #c62828;'>🔴 本品核心劣势词云</h5>",
+                                unsafe_allow_html=True)
+                    if neg_data_c:
+                        st.pyplot(generate_wordcloud_image(neg_data_c, theme='negative'))
+                    else:
+                        st.warning("未提取到劣势数据")
+                except Exception as e:
+                    st.error(f"竞品词云渲染失败: {e}")
+
+                if 'pos_data_c' in locals() or 'neg_data_c' in locals():
+                    if pos_data_c or neg_data_c:
+                        st.markdown("---")
+                        st.markdown("### 📊 竞品差异化多维占比分析")
+                        st.caption("基于本品与竞品对比提取的核心优势与劣势权重数据分布。")
+
+                        # 将竞品字典转换为 DataFrame，取 Top 10
+                        df_pos_c = pd.DataFrame(list(pos_data_c.items()), columns=['特征', '权重']).nlargest(10,
+                                                                                                             '权重') if pos_data_c else pd.DataFrame()
+                        df_neg_c = pd.DataFrame(list(neg_data_c.items()), columns=['特征', '权重']).nlargest(10,
+                                                                                                             '权重') if neg_data_c else pd.DataFrame()
+
+                        # ---------------- 第一排：左饼图，右环形图 ----------------
+                        # ---------------- 第一排：左饼图，右环形图 ----------------
+                        col_pie1_c, col_pie2_c = st.columns(2)
+
+                        with col_pie1_c:
+                            st.markdown("<h5 style='text-align: center; color: #2e7d32;'>🟢 Top 10 核心优势占比</h5>",
+                                        unsafe_allow_html=True)
+                            if not df_pos_c.empty:
+                                pie_chart_c = alt.Chart(df_pos_c).mark_arc(innerRadius=0, stroke="#fff").encode(
+                                    theta=alt.Theta(field="权重", type="quantitative"),
+                                    # 【关键 1：逆时针排布】强制令其按升序绘制，使得最大的色块被挤压到左侧（12点钟逆时针方向）
+                                    order=alt.Order(field="权重", type="quantitative", sort="ascending"),
+                                    # 【关键 2：文字图例 + 权重颜色深度】Color绑定到“特征”(保留文字图例)，但根据“权重”降序排列颜色分配，并开启 reverse=True (最重=最深)
+                                    color=alt.Color(field="特征", type="nominal",
+                                                    sort=alt.SortField(field="权重", order="descending"),
+                                                    scale=alt.Scale(scheme='greens', reverse=True),
+                                                    legend=alt.Legend(title="优势特征")),
+                                    tooltip=['特征', '权重']
+                                ).properties(height=350)
+                                st.altair_chart(pie_chart_c, use_container_width=True)
+
+                        with col_pie2_c:
+                            st.markdown("<h5 style='text-align: center; color: #c62828;'>🔴 Top 10 核心劣势占比</h5>",
+                                        unsafe_allow_html=True)
+                            if not df_neg_c.empty:
+                                donut_chart_c = alt.Chart(df_neg_c).mark_arc(innerRadius=70, stroke="#fff").encode(
+                                    theta=alt.Theta(field="权重", type="quantitative"),
+                                    order=alt.Order(field="权重", type="quantitative", sort="ascending"),
+                                    color=alt.Color(field="特征", type="nominal",
+                                                    sort=alt.SortField(field="权重", order="descending"),
+                                                    scale=alt.Scale(scheme='reds', reverse=True),
+                                                    legend=alt.Legend(title="劣势特征")),
+                                    tooltip=['特征', '权重']
+                                ).properties(height=350)
+                                st.altair_chart(donut_chart_c, use_container_width=True)
+
+                        # ---------------- 第二排：右下角南丁格尔玫瑰图 ----------------
+                        st.write("")
+                        # 左侧给玫瑰图，右侧留空
+                        col_rose_c, col_empty_c = st.columns([1, 1])
+
+                        with col_rose_c:
+                            st.markdown("<h5 style='text-align: center;'>🏵️ 核心痛点分布 (南丁格尔玫瑰图)</h5>",
+                                        unsafe_allow_html=True)
+                            st.caption("视觉重点：颜色最深、半径最长的扇形即为第一大痛点，一眼看穿严重程度。")
+                            if not df_neg_c.empty:
+                                rose_chart_c = alt.Chart(df_neg_c).mark_arc(innerRadius=20, stroke="#fff").encode(
+                                    # 角度排布
+                                    theta=alt.Theta(field="特征", type="nominal",
+                                                    sort=alt.SortField(field="权重", order="ascending")),
+
+                                    # 半径排布
+                                    radius=alt.Radius(field="权重", type="quantitative",
+                                                      scale=alt.Scale(type="sqrt", zero=True, rangeMin=20)),
+
+                                    # 👇 核心修改：同上，映射名义变量召唤图例，并严格挂钩权重深度
+                                    color=alt.Color(field="特征", type="nominal",
+                                                    sort=alt.SortField(field="权重", order="descending"),
+                                                    scale=alt.Scale(scheme='redpurple', reverse=True),
+                                                    legend=alt.Legend(title="痛点特征")),
+                                    tooltip=['特征', '权重']
+                                ).properties(height=400)
+                                st.altair_chart(rose_chart_c, use_container_width=True)
+                            else:
+                                st.info("📊 暂无负面痛点数据。")
+                # 竞品比对报告的重新生成按钮
+                st.markdown("---")
+                col_btn_c1, col_btn_c2 = st.columns(2)
+
+                with col_btn_c1:
+                    # 添加 key 防止与上面的按钮冲突
+                    if st.button("🎨 重新排版竞品图表 (不耗AI额度)", key="btn_redraw_comp", use_container_width=True):
+                        pass
+
+                with col_btn_c2:
+                    btn_text_comp = f"🔄 重新调用 AI 生成竞品报告" if selected_model == st.session_state.report_comp_model else f"🔄 切换 {selected_model} 重新生成"
+                    if st.button(btn_text_comp, key="btn_regen_comp", use_container_width=True,
+                                 disabled=not can_use_ai() or st.session_state.processing_comp):
+                        st.session_state.report_comp = None
+                        st.rerun()

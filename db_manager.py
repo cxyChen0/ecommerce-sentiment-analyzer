@@ -1,5 +1,6 @@
 import sqlite3
 import datetime
+import pandas as pd
 
 DB_FILE = "ecommerce_app.db"
 
@@ -157,3 +158,132 @@ def get_product_trend(user_id, product_id):
         """
         df = pd.read_sql_query(query, conn)
     return df
+
+
+# ==========================================
+# 管理员专属：全量数据读取与同步操作
+# ==========================================
+
+def get_all_users_admin():
+    """读取所有用户信息（隐藏密码列以防手滑修改导致用户无法登录）"""
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            "SELECT id, username, role, last_date, spider_count, ai_count, dl_count FROM users",
+            conn
+        )
+
+
+def sync_users_admin(edited_df, original_df):
+    """【安全版】同步前端编辑器传回的用户 DataFrame 到数据库"""
+    import pandas as pd
+    import datetime
+    with get_connection() as conn:
+        c = conn.cursor()
+        # 1. 处理新增和更新
+        for _, row in edited_df.iterrows():
+            if pd.isna(row.get('id')):
+                pwd = 'default123'  # 给新增用户一个默认密码
+                c.execute('''
+                    INSERT INTO users (username, password, role, last_date, spider_count, ai_count, dl_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (row['username'], pwd, row.get('role', '客户'),
+                      row.get('last_date', datetime.date.today().strftime("%Y-%m-%d")),
+                      row.get('spider_count', 0), row.get('ai_count', 0), row.get('dl_count', 0)))
+            else:
+                c.execute('''
+                    UPDATE users 
+                    SET username=?, role=?, last_date=?, spider_count=?, ai_count=?, dl_count=? 
+                    WHERE id=?
+                ''', (row['username'], row['role'], row['last_date'],
+                      row['spider_count'], row['ai_count'], row['dl_count'], row['id']))
+
+        # 2. 精准处理删除（差集法，且绝对保护 admin 账号不被误删）
+        if not original_df.empty:
+            original_ids = set(original_df['id'].dropna().astype(int))
+            edited_ids = set(edited_df['id'].dropna().astype(int))
+            deleted_ids = list(original_ids - edited_ids)
+
+            if deleted_ids:
+                placeholders = ','.join('?' * len(deleted_ids))
+                c.execute(f"DELETE FROM users WHERE id IN ({placeholders}) AND username != 'admin'", deleted_ids)
+        conn.commit()
+
+
+def get_all_product_stats_admin():
+    """读取所有历史分析数据"""
+    with get_connection() as conn:
+        return pd.read_sql_query("SELECT * FROM product_stats", conn)
+
+
+def sync_product_stats_admin(edited_df, original_df):
+    """【安全版】同步前端编辑器传回的商品历史数据 DataFrame 到数据库"""
+    import pandas as pd
+    with get_connection() as conn:
+        c = conn.cursor()
+        # 1. 处理新增和更新
+        for _, row in edited_df.iterrows():
+            if pd.isna(row.get('id')):
+                c.execute('''
+                    INSERT INTO product_stats (user_id, product_id, product_name, record_date, sales_volume, positive_rate)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (row['user_id'], row['product_id'], row['product_name'],
+                      row['record_date'], row['sales_volume'], row['positive_rate']))
+            else:
+                c.execute('''
+                    UPDATE product_stats 
+                    SET user_id=?, product_id=?, product_name=?, record_date=?, sales_volume=?, positive_rate=?
+                    WHERE id=?
+                ''', (row['user_id'], row['product_id'], row['product_name'],
+                      row['record_date'], row['sales_volume'], row['positive_rate'], row['id']))
+
+        # 2. 精准处理删除（差集法）
+        if not original_df.empty:
+            original_ids = set(original_df['id'].dropna().astype(int))
+            edited_ids = set(edited_df['id'].dropna().astype(int))
+            deleted_ids = list(original_ids - edited_ids)
+
+            if deleted_ids:
+                placeholders = ','.join('?' * len(deleted_ids))
+                c.execute(f"DELETE FROM product_stats WHERE id IN ({placeholders})", deleted_ids)
+        conn.commit()
+
+# ==========================================
+# 商家专属：个人历史数据读取与严格隔离同步
+# ==========================================
+def get_merchant_product_stats(user_id):
+    """读取当前商家的所有历史分析数据"""
+    with get_connection() as conn:
+        return pd.read_sql_query(f"SELECT * FROM product_stats WHERE user_id={user_id}", conn)
+
+def sync_merchant_product_stats(edited_df, original_df, user_id):
+    """商家同步自己的数据（修复过滤删除Bug，采用精准差异对比）"""
+    with get_connection() as conn:
+        c = conn.cursor()
+        # 1. 处理新增和更新
+        for _, row in edited_df.iterrows():
+            if pd.isna(row.get('id')):
+                # 新增行
+                c.execute('''
+                    INSERT INTO product_stats (user_id, product_id, product_name, record_date, sales_volume, positive_rate)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (user_id, row['product_id'], row['product_name'],
+                      row['record_date'], row['sales_volume'], row['positive_rate']))
+            else:
+                # 更新行
+                c.execute('''
+                    UPDATE product_stats 
+                    SET product_id=?, product_name=?, record_date=?, sales_volume=?, positive_rate=?
+                    WHERE id=? AND user_id=?
+                ''', (row['product_id'], row['product_name'],
+                      row['record_date'], row['sales_volume'], row['positive_rate'], row['id'], user_id))
+
+        # 2. 精准处理删除（对比原显示表格和编辑后表格的 ID 差异，只删差集）
+        if not original_df.empty:
+            original_ids = set(original_df['id'].dropna().astype(int))
+            edited_ids = set(edited_df['id'].dropna().astype(int))
+            deleted_ids = list(original_ids - edited_ids) # 算出哪些 ID 被用户在前端按 Delete 删了
+
+            if deleted_ids:
+                placeholders = ','.join('?' * len(deleted_ids))
+                c.execute(f"DELETE FROM product_stats WHERE user_id=? AND id IN ({placeholders})", [user_id] + deleted_ids)
+        conn.commit()
