@@ -50,7 +50,7 @@ def get_client(model_name, user_provided_key=None):
 
 def stream_wrapper(client, model, messages):
     """通用流式包装器 (支持深度思考模式)"""
-    yield f"> 🤖 **分析引擎**：`{model}` \n\n"
+    yield f">  **分析引擎**：`{model}` \n\n"
 
     extra_params = {}
     if "r1" in model.lower() or "deepseek" in model.lower():
@@ -73,7 +73,7 @@ def stream_wrapper(client, model, messages):
 
                 if hasattr(delta, "reasoning_content") and delta.reasoning_content:
                     if not is_thinking:
-                        yield "> 🧠 **深度思考过程**：\n> "
+                        yield ">  **深度思考过程**：\n> "
                         is_thinking = True
                     content = delta.reasoning_content.replace("\n", "\n> ")
                     yield content
@@ -86,7 +86,7 @@ def stream_wrapper(client, model, messages):
                     yield delta.content
 
     except Exception as e:
-        yield f"\n\n❌ **AI 分析中断**: {str(e)}"
+        yield f"\n\n **AI 分析中断**: {str(e)}"
 
 # ==========================================
 # 1. 单品深度分析 (精准数据导向版)
@@ -94,7 +94,7 @@ def stream_wrapper(client, model, messages):
 def analyze_single_product_stream(product_name, comments_list, sales_volume=0, api_key=None, model="deepseek-v3.2-exp"):
     client = get_client(model, api_key)
     if not client:
-        yield "❌ 未配置对应平台的 API Key (阿里云或火山引擎)"
+        yield " 未配置对应平台的 API Key (阿里云或火山引擎)"
         return
 
     valid_comments = [str(c) for c in comments_list if len(str(c)) > 4]
@@ -105,7 +105,7 @@ def analyze_single_product_stream(product_name, comments_list, sales_volume=0, a
     不需要花哨的营销词汇，必须提供明确的数据预估和具体的改进方向。
 
     ### 📝 报告结构要求：
-    # 📦 {product_name}单品诊断报告
+    #  {product_name}单品诊断报告
 
     ### 1. 📊 核心指标预估 (供数据库记录参考)
     - **预估好评率**：[请严格根据评论的情感倾向，推算出一个具体的百分比，例如 82%]
@@ -145,7 +145,7 @@ def analyze_single_product_stream(product_name, comments_list, sales_volume=0, a
     {{"negative_wordcloud": {{"原装笔芯断墨": 100, "假货争议": 55, "笔夹歪斜": 40, "其他凑数词汇": 12, "必须写满20个": 8}}}}
     ```
     
-    ⚠️ 严厉警告：
+    严厉警告：
     如果你的模型支持输出前置的深度思考或推演过程，请注意：在你的【思考/推演过程】阶段，绝对禁止使用任何 Markdown 格式的标题语法（例如不要使用 #、##、###）。思考过程必须是纯碎的普通段落文本。只有在输出最终正式报告时，才能使用上述 Markdown 语法。
     """
 
@@ -164,7 +164,7 @@ def analyze_single_product_stream(product_name, comments_list, sales_volume=0, a
 def analyze_market_trends_stream(search_query, comments_list, api_key=None, model="qwen-plus"):
     client = get_client(model, api_key)
     if not client:
-        yield "❌ 未配置对应平台的 API Key"
+        yield " 未配置对应平台的 API Key"
         return
 
     text_input = "\n".join(comments_list[:100])
@@ -173,8 +173,8 @@ def analyze_market_trends_stream(search_query, comments_list, api_key=None, mode
     你是一位专业的行业调研分析师。基于这批市场热销竞品的混合评论，请客观总结该品类的市场现状和未被满足的痛点。
     拒绝废话，直击商业本质。
 
-    ### 📝 报告结构要求：
-    # 📈 {search_query}市场品类趋势调研报告
+    ###  报告结构要求：
+    # {search_query}市场品类趋势调研报告
 
     ### 1. 🎯 消费者核心决策因子
     *按重要性降序，列出决定用户购买的 Top 3 因素。*
@@ -211,7 +211,7 @@ def analyze_market_trends_stream(search_query, comments_list, api_key=None, mode
     {{"negative_wordcloud": {{"原装笔芯断墨": 100, "假货争议": 55, "笔夹歪斜": 40, "其他凑数词汇": 12, "必须写满20个": 8}}}}
     ```
     
-    ⚠️ 严厉警告：
+    严厉警告：
     如果你的模型支持输出前置的深度思考或推演过程，请注意：在你的【思考/推演过程】阶段，绝对禁止使用任何 Markdown 格式的标题语法（例如不要使用 #、##、###）。思考过程必须是纯碎的普通段落文本。只有在输出最终正式报告时，才能使用上述 Markdown 语法。
     """
 
@@ -227,7 +227,7 @@ def analyze_market_trends_stream(search_query, comments_list, api_key=None, mode
 def analyze_competitor_comparison_stream(my_product_name, my_comments, competitor_comments, api_key=None, model="qwen-max"):
     client = get_client(model, api_key)
     if not client:
-        yield "❌ 未配置对应平台的 API Key"
+        yield " 未配置对应平台的 API Key"
         return
 
     my_text = "\n".join([str(c) for c in my_comments[:50]])
@@ -237,7 +237,7 @@ def analyze_competitor_comparison_stream(my_product_name, my_comments, competito
     你是一名商业数据分析师。请对本品（{my_product_name}）与市场竞品进行客观、冷酷的横向数据对比。
     切忌偏袒本品，指出真实的差距。
 
-    ### 📝 报告结构要求：
+    ### 报告结构要求：
     # ⚖️ 竞品差异化诊断报告
 
     ### 1. 📊 核心能力雷达比对
@@ -280,7 +280,7 @@ def analyze_competitor_comparison_stream(my_product_name, my_comments, competito
     {{"negative_wordcloud": {{"原装笔芯断墨": 100, "做工粗糙": 55, "物流太慢": 40, "凑数词1": 12, "必须满20个": 8}}}}
     ```
     
-    ⚠️ 严厉警告：
+    严厉警告：
     如果你的模型支持输出前置的深度思考或推演过程，请注意：在你的【思考/推演过程】阶段，绝对禁止使用任何 Markdown 格式的标题语法（例如不要使用 #、##、###）。思考过程必须是纯碎的普通段落文本。只有在输出最终正式报告时，才能使用上述 Markdown 语法。
     """
 
