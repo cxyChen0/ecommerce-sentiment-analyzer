@@ -3,8 +3,6 @@ import datetime
 import pandas as pd
 
 DB_FILE = "ecommerce_app.db"
-
-
 def get_connection():
     return sqlite3.connect(DB_FILE, check_same_thread=False)
 
@@ -13,7 +11,7 @@ def init_db():
     """初始化数据库：创建新版 users 表"""
     with get_connection() as conn:
         c = conn.cursor()
-        # 【架构升级 1】: users 表新增 id 字段作为绝对主键
+        # users 表新增 id 字段作为绝对主键
         c.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +38,7 @@ def init_stats_db():
     """初始化数据库：创建新版 product_stats 表"""
     with get_connection() as conn:
         c = conn.cursor()
-        # 【架构升级 2】: 废弃 merchant_user，改用 user_id 外键关联
+        # 废弃 merchant_user，改用 user_id 外键关联
         c.execute('''
             CREATE TABLE IF NOT EXISTS product_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +71,7 @@ def register_user(username, password, role):
 
 
 def verify_login(username, password):
-    """【架构升级 3】: 登录成功后，必须把底层的 id 查出来返回给前端"""
+    """ 登录成功后，必须把底层的 id 查出来返回给前端"""
     with get_connection() as conn:
         c = conn.cursor()
         c.execute("SELECT id, role FROM users WHERE username=? AND password=?", (username, password))
@@ -94,7 +92,7 @@ def update_password(username, new_password):
 
 
 def get_user_data_and_check_reset(user_id):
-    """【架构升级 4】: 所有额度查询，全部改用 user_id 检索，速度极快"""
+    """ 所有额度查询，全部改用 user_id 检索，速度极快"""
     with get_connection() as conn:
         c = conn.cursor()
         c.execute("SELECT role, last_date, spider_count, ai_count, dl_count FROM users WHERE id=?", (user_id,))
@@ -122,7 +120,7 @@ def increment_quota(user_id, field_name):
 
 
 def save_daily_stats(user_id, product_id, product_name, sales_volume, positive_rate):
-    """【架构升级 5】: 保存数据时，写入 user_id"""
+    """保存数据时，写入 user_id"""
     if not user_id or not product_id:
         return
     today_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -147,23 +145,21 @@ def get_merchant_products(user_id):
 
 
 def get_product_trend(user_id, product_id):
-    """画图表时，同时根据 user_id 和 product_id 双重锁定"""
+    """画图表时，同时根据 user_id 和 product_id 双重锁定（修复 SQL 注入风险）"""
     import pandas as pd
     with get_connection() as conn:
-        query = f"""
+        # 使用 ? 作为占位符，绝对不要用 f-string 拼接变量
+        query = """
             SELECT record_date as 日期, sales_volume as 销量, positive_rate as 预估好评率 
             FROM product_stats 
-            WHERE user_id = {user_id} AND product_id = '{product_id}'
+            WHERE user_id = ? AND product_id = ?
             ORDER BY record_date ASC
         """
-        df = pd.read_sql_query(query, conn)
+        # 利用 params 参数传入变量，底层会自动进行转义和安全处理
+        df = pd.read_sql_query(query, conn, params=(user_id, product_id))
     return df
 
-
-# ==========================================
 # 管理员专属：全量数据读取与同步操作
-# ==========================================
-
 def get_all_users_admin():
     """读取所有用户信息（隐藏密码列以防手滑修改导致用户无法登录）"""
     with get_connection() as conn:
@@ -174,9 +170,11 @@ def get_all_users_admin():
 
 
 def sync_users_admin(edited_df, original_df):
-    """【安全版】同步前端编辑器传回的用户 DataFrame 到数据库"""
+    """同步前端编辑器传回的用户 DataFrame 到数据库"""
     import pandas as pd
     import datetime
+
+    edited_df = edited_df.fillna({'spider_count': 0, 'ai_count': 0, 'dl_count': 0})
     with get_connection() as conn:
         c = conn.cursor()
         # 1. 处理新增和更新
@@ -216,8 +214,10 @@ def get_all_product_stats_admin():
 
 
 def sync_product_stats_admin(edited_df, original_df):
-    """【安全版】同步前端编辑器传回的商品历史数据 DataFrame 到数据库"""
+    """同步前端编辑器传回的商品历史数据 DataFrame 到数据库"""
     import pandas as pd
+
+    edited_df = edited_df.fillna({'sales_volume': 0, 'positive_rate': 0.0})
     with get_connection() as conn:
         c = conn.cursor()
         # 1. 处理新增和更新
@@ -247,16 +247,15 @@ def sync_product_stats_admin(edited_df, original_df):
                 c.execute(f"DELETE FROM product_stats WHERE id IN ({placeholders})", deleted_ids)
         conn.commit()
 
-# ==========================================
 # 商家专属：个人历史数据读取与严格隔离同步
-# ==========================================
 def get_merchant_product_stats(user_id):
-    """读取当前商家的所有历史分析数据"""
+    """读取当前商家的所有历史分析数据（修复 SQL 注入风险）"""
     with get_connection() as conn:
-        return pd.read_sql_query(f"SELECT * FROM product_stats WHERE user_id={user_id}", conn)
+        return pd.read_sql_query("SELECT * FROM product_stats WHERE user_id=?", conn, params=(user_id,))
 
 def sync_merchant_product_stats(edited_df, original_df, user_id):
     """商家同步自己的数据（修复过滤删除Bug，采用精准差异对比）"""
+    edited_df = edited_df.fillna({'sales_volume': 0, 'positive_rate': 0.0})
     with get_connection() as conn:
         c = conn.cursor()
         # 1. 处理新增和更新

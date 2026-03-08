@@ -66,14 +66,13 @@ def wait_for_user_action(driver, worker_name):
     """发现拦截就卡住，等你扫码完或点掉白框自动继续"""
     time.sleep(2)
     if is_intercepted(driver):
-        print(f"\n⚠️ [{worker_name}] 触发拦截！请手动扫码或点掉白框...")
+        print(f"\n [{worker_name}] 触发拦截！请手动扫码或点掉白框...")
         while is_intercepted(driver):
             time.sleep(2)
-        print(f"✅ [{worker_name}] 拦截解除！等待页面自然加载...")
+        print(f" [{worker_name}] 拦截解除！等待页面自然加载...")
         time.sleep(4)  # 绝不强行刷新，给足跳转时间
 
-
-# === 过滤器、滚动条等辅助函数保持不变 ===
+# 筛除非法评论逻辑
 def is_junk_text(text):
     if not text: return True
     text = text.strip()
@@ -217,12 +216,35 @@ def run_spider(target_url, worker_id=1):
 
         try:
             page_text = driver.find_element(By.TAG_NAME, "body").text
-            no_comment_flags = ["默认好评", "暂无评价", "帮助不大的评价", "还没有人评价", "评价方未及时做出评价"]
+            # 1. 扩展无评论特征库，精准狙击截图中的“暂时还没有评价呢~”
+            no_comment_flags = [
+                "默认好评", "暂无评价", "帮助不大的评价", "还没有人评价",
+                "评价方未及时做出评价", "暂时还没有评价"
+            ]
+
             if any(flag in page_text for flag in no_comment_flags):
+                # 2. 强校验：只要命中了特征词，立刻去页面上寻找那个提示框，如果它确实肉眼可见，直接终结！
+                empty_elements = driver.find_elements(By.XPATH,
+                                                      "//*[contains(text(), '暂时还没有评价') or contains(text(), '暂无评价') or contains(text(), '还没有人评价')]")
+
+                for el in empty_elements:
+                    if el.is_displayed():
+                        return "Error: 抓取终止：该商品暂时没有任何评价数据。", product_title, sales_volume
+
+                # 终极防线兜底：如果没找到具体提示元素，对页面现存文本进行“含金量”扫描
                 quick_elements = driver.find_elements(By.XPATH, "//div[string-length(text())>4]")
-                valid_count = sum(1 for el in quick_elements if not is_junk_text(el.text))
+                valid_count = 0
+                for el in quick_elements:
+                    t = el.text.strip()
+                    # 过滤掉垃圾词汇后，进一步判断：真实的评价极少是纯短语，通常包含中文标点，或者字数大于12个字
+                    # 这样可以完美把 "材质   合金"、"型号   R1 Air" 等商品参数挡在门外
+                    if not is_junk_text(t) and (
+                            "，" in t or "。" in t or "！" in t or "？" in t or "～" in t or len(t) > 12):
+                        valid_count += 1
+
+                # 如果整个页面扫下来，连一条像样的句子都没有，判定为无数据页面
                 if valid_count == 0:
-                    return "Error: ❌ 抓取终止：暂无有效的文字评论。", product_title, sales_volume
+                    return "Error: 抓取终止：页面未发现真实有效的文本评论。", product_title, sales_volume
         except:
             pass
 

@@ -19,29 +19,29 @@ def get_client(model_name, user_provided_key=None):
     if not OPENAI_AVAILABLE:
         return None
 
-    # 判断是否为火山方舟(豆包)模型
     is_volcengine = model_name.startswith("ep-") or "doubao" in model_name.lower()
+
+    # 提取系统底层的默认 Key
+    sys_aliyun = os.getenv("ALIYUN_API_KEY")
+    sys_volc = os.getenv("VOLC_API_KEY")
 
     if is_volcengine:
         # 火山方舟(豆包)
         base_url = "https://ark.cn-beijing.volces.com/api/v3"
 
-        # 拦截阿里云 sk- 密钥
-        # 如果用户传了密钥，且不是 sk- 开头，读用户的, 否则读 .env 里的 VOLC_API_KEY
-        if user_provided_key and not user_provided_key.startswith("sk-"):
-            api_key = user_provided_key
+        if user_provided_key and user_provided_key != sys_aliyun:
+            api_key = user_provided_key  # 强制使用用户传入的Key，哪怕是乱填的 "12345"
         else:
-            api_key = os.getenv("VOLC_API_KEY")
+            api_key = sys_volc
 
     else:
         # ======= 阿里云百炼通道 =======
         base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-        # 阿里云密钥 sk- 开头
-        if user_provided_key and user_provided_key.startswith("sk-"):
-            api_key = user_provided_key
+        if user_provided_key and user_provided_key != sys_volc:
+            api_key = user_provided_key  # 强制使用用户传入的Key
         else:
-            api_key = os.getenv("ALIYUN_API_KEY")
+            api_key = sys_aliyun
 
     if not api_key:
         return None
@@ -104,7 +104,7 @@ def analyze_single_product_stream(product_name, comments_list, sales_volume=0, a
     你是一位严谨的电商数据分析师。请基于提供的用户评论数据，输出客观、直接、一针见血的诊断报告。
     不需要花哨的营销词汇，必须提供明确的数据预估和具体的改进方向。
 
-    ### 📝 报告结构要求：
+    ### 报告结构要求：
     #  {product_name}单品诊断报告
 
     ### 1. 📊 核心指标预估 (供数据库记录参考)

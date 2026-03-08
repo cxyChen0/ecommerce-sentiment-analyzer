@@ -238,16 +238,22 @@ with st.sidebar:
 
     #  3. API Key 隔离逻辑
     user_api_key = default_key_from_env
+    is_using_custom_key = False
     if role != '管理员':
         if role == '商家':
             st.header(":material/settings: 配置API-key")
             if ai_cnt >= 10:
                 st.warning(":material/warning: 今日免费额度已用尽，需配置自有 Key")
                 user_api_key = st.text_input("API Key", value="", type="password", placeholder="请输入您的 API Key")
+                if user_api_key:
+                    is_using_custom_key = True  # 标记使用了自有 Key
             else:
                 st.caption("正在使用系统自带的 API Key，您可配置自己的 API Key 解除 AI 额度限制")
                 custom_key = st.text_input("自定义 API Key (选填)", value="", type="password")
                 if custom_key: user_api_key = custom_key
+                if custom_key:
+                    user_api_key = custom_key
+                    is_using_custom_key = True  # 标记使用了自有 Key
 
     else:
         # 极客细节：管理员平时什么都看不到，直接静默使用 default_key_from_env。
@@ -455,7 +461,7 @@ if st.session_state.current_page == 'history':
     # 新增：管理员/商家的增删改查后台
     with tab_edit:
         st.subheader(":material/edit_document: 管理我的所有追踪记录")
-        st.caption("提示：双击单元格即可修改数据。选中行按 Delete 键可删除。点击底部加号可手动伪造/新增记录。")
+        st.caption("提示：双击单元格即可修改数据。选中行按 Delete 键可删除。点击底部加号可新增记录。")
 
         # 获取当前商家独有的全部数据
         df_my_stats = db_manager.get_merchant_product_stats(st.session_state.current_user_id)
@@ -507,6 +513,9 @@ if st.session_state.current_page == 'history':
             db_manager.sync_merchant_product_stats(edited_my_stats, filtered_my_stats,
                                                    st.session_state.current_user_id)
             st.toast(":material/check_circle: 您的历史数据更新成功！")
+
+            import time
+            time.sleep(1.2)
             st.rerun()
 
     # 执行到这里直接停止，不再向下渲染分析大厅的代码
@@ -554,28 +563,32 @@ if st.session_state.current_page == 'admin':
             ]
 
         # 使用 st.data_editor 开启交互式表格，传入过滤后的 DataFrame
-        edited_users = st.data_editor(
-            filtered_users_df,
-            num_rows="dynamic",
-            disabled=["id"],
-            use_container_width=True,
-            key="admin_user_editor",
-            # 👇 新增：配置显示列名 (底层还是英文，只改UI显示)
-            column_config={
-                "username": "用户名",
-                "role": "角色权限",
-                "last_date": "最后活跃/重置日期",
-                "spider_count": "爬虫已用次数",
-                "ai_count": "AI已用次数",
-                "dl_count": "下载已用次数"
-            }
-        )
+        with st.form("user_edit_form", clear_on_submit=False):
+            edited_users = st.data_editor(
+                filtered_users_df,
+                num_rows="dynamic",
+                disabled=["id"],
+                use_container_width=True,
+                column_config={
+                    "username": "用户名",
+                    "role": "角色权限",
+                    "last_date": "最后活跃/重置日期",
+                    "spider_count": "爬虫已用次数",
+                    "ai_count": "AI已用次数",
+                    "dl_count": "下载已用次数"
+                }
+            )
 
-        if st.button(" 确认并覆盖显示的用户数据", type="primary"):
-            # 传入编辑后的表格 edited_users，以及过滤后的原始表格 filtered_users_df
-            db_manager.sync_users_admin(edited_users, filtered_users_df)
-            st.toast("用户数据同步完成！")
-            st.rerun()
+            # 按钮必须换成 st.form_submit_button
+            submit_users = st.form_submit_button(":material/check_circle: 确认并覆盖显示的用户数据", type="primary",
+                                                 use_container_width=True)
+
+            if submit_users:
+                db_manager.sync_users_admin(edited_users, filtered_users_df)
+                st.toast("用户数据同步完成！")
+                import time
+                time.sleep(1.2)
+                st.rerun()
 
     with tab_stats:
         st.subheader("全局商品追踪记录")
@@ -628,6 +641,8 @@ if st.session_state.current_page == 'admin':
             # 传入编辑后的表格 edited_stats，以及过滤后的原始表格 filtered_df
             db_manager.sync_product_stats_admin(edited_stats, filtered_df)
             st.toast(" 商品历史数据同步完成！")
+            import time
+            time.sleep(1.2)
             st.rerun()
 
     # 执行到这里停止，阻止渲染主页内容
@@ -829,7 +844,7 @@ def _update_wordclouds(data, pos_data, neg_data):
 
 
 def extract_dual_wordclouds(text):
-    """终极鲁棒提取器 4.0：采用词法分析深搜，完美兼容纯文本混排与缺失代码块"""
+    """终极鲁棒提取器 4.1：增加对 AI '平铺输出' 的兜底识别"""
     pos_data, neg_data = {}, {}
     blocks_to_try = []
 
@@ -839,60 +854,55 @@ def extract_dual_wordclouds(text):
     # 策略 2：基于括号深度的精准剥离法
     start_idx = 0
     while True:
-        # 寻找下一个潜在大括号的起点
         start = text.find('{', start_idx)
-        if start == -1:
-            break
-
-        # 往后匹配成对的括号，同时规避字符串内部的干扰括号
-        depth = 0
-        in_string = False
-        escape = False
-        end = -1
-
+        if start == -1: break
+        depth, in_string, escape, end = 0, False, False, -1
         for i in range(start, len(text)):
             char = text[i]
-
-            # 处理转义符，防止字符串内有类似 \" 的干扰
-            if escape:
-                escape = False
-                continue
-            if char == '\\':
-                escape = True
-                continue
-            # 记录是否进入了双引号内部
-            if char == '"':
-                in_string = not in_string
-                continue
-
-            # 只有在不在字符串内部时，才计算括号深度
+            if escape: escape = False; continue
+            if char == '\\': escape = True; continue
+            if char == '"': in_string = not in_string; continue
             if not in_string:
                 if char == '{':
                     depth += 1
                 elif char == '}':
                     depth -= 1
-                    # 当深度归零，说明成功捕获了一个完整的顶层 JSON 对象
                     if depth == 0:
-                        end = i
+                        end = i;
                         break
-
         if end != -1:
-            # 捕获成功，装入待解析列表，并把扫描指针移动到该对象的后方
             blocks_to_try.append(text[start:end + 1])
             start_idx = end + 1
         else:
-            # 如果没找到闭合，可能存在截断，步进跳过
             start_idx = start + 1
 
-    # 遍历所有被剥离出来的块，交由 update 函数处理
+    # 新增：用于收集没有外层包裹的纯特征字典
+    flat_dicts = []
+
     for block in blocks_to_try:
         block = block.strip()
         if not block: continue
         try:
             data = json.loads(block)
+            # 1. 先尝试原有的嵌套识别逻辑
             _update_wordclouds(data, pos_data, neg_data)
+
+            # 2. 兜底识别：如果它是一个纯粹的 "词汇: 数字" 字典
+            if isinstance(data, dict) and len(data) > 0:
+                # 检查是否所有 value 都是数字（说明这就是我们要的词云底层数据）
+                is_flat = True
+                for v in data.values():
+                    # 允许整型、浮点型，或者能转成数字的字符串
+                    if not (isinstance(v, (int, float)) or (isinstance(v, str) and v.replace('.', '', 1).isdigit())):
+                        is_flat = False
+                        break
+
+                if is_flat:
+                    # 强制转为浮点数存入平铺列表
+                    flat_dicts.append({str(k): float(v) for k, v in data.items()})
+
         except json.JSONDecodeError:
-            # 兼容极少数模型输出丢了最外层括号的残缺 JSON
+            # 兼容残缺 JSON
             try:
                 fixed_block = "{" + block + "}" if not block.startswith("{") else block
                 data = json.loads(fixed_block)
@@ -900,13 +910,20 @@ def extract_dual_wordclouds(text):
             except:
                 pass
 
+    # 触发兜底机制：如果没找到带标签的字典，就强行分配
+    if not pos_data and not neg_data and len(flat_dicts) > 0:
+        if len(flat_dicts) >= 1:
+            pos_data.update(flat_dicts[0])  # 默认第一个字典是正面
+        if len(flat_dicts) >= 2:
+            neg_data.update(flat_dicts[1])  # 默认第二个字典是负面
+
     return pos_data, neg_data
 
 trigger_search = start_analysis or (user_input and user_input != st.session_state.last_query)
 
 if trigger_search:
     if not can_use_spider():
-        st.error(" 您今日的抓取额度已耗尽，或需要提供自己的 API Key！")
+        st.error(" 您今日的抓取额度已耗尽")
     else:
         st.session_state.last_query = user_input
         st.session_state.df_result = None
@@ -914,7 +931,7 @@ if trigger_search:
         for k in ['report_single', 'report_market', 'report_comp']: st.session_state[k] = None
         st.session_state.processing_comp = False
 
-        inc_spider()  # 扣除抓取次数
+        # inc_spider()  # 扣除抓取次数
 
         # 1. 适配爬虫的新返回值 (增加 sales_volume)
         if is_url(user_input):
@@ -952,6 +969,7 @@ if trigger_search:
                     st.stop()
 
                 st.session_state.df_result = clean_df
+                inc_spider()
 
                 st.success(f"抓取成功！有效评论数: {len(clean_df)} | 当前销量: {sales_volume}")
         else:
@@ -975,6 +993,7 @@ if trigger_search:
                                     pass
                 if all_cmts:
                     st.session_state.df_result = pd.DataFrame({'content': all_cmts})
+                    inc_spider()
                     st.success(f"调研完成，共采集 {len(all_cmts)} 条市场评论")
             else:
                 st.error("未找到相关商品")
@@ -1013,8 +1032,6 @@ if st.session_state.df_result is not None:
 
         # 1. 强力截断：找到第一个词云JSON的起点（包含可能存在的前置反引号），直接截断到全文末尾
         clean_report = saved_rpt
-        clean_report = re.sub(r'\s*(?:`{3}(?:json)?\s*)?\{[^{]*?["\'](?:positive|negative)_wordcloud["\'][\s\S]*', '',
-                              clean_report, flags=re.IGNORECASE)
 
         think_content = ""
 
@@ -1033,6 +1050,11 @@ if st.session_state.df_result is not None:
                 think_content = alt_match.group(1).strip()
                 # 从正文中精确剔除这段思考文本
                 clean_report = clean_report.replace(alt_match.group(0), "").strip()
+
+        # 放宽约束：只要报告后半部分出现连续包含数字权重的 JSON 字典，就直接截断抹除
+        clean_report = re.sub(r'\s*(?:`{3}(?:json)?\s*)?\{\s*".*?"\s*:\s*\d+[\s\S]*', '', clean_report,
+                              flags=re.IGNORECASE)
+
 
         # 如果成功抓到了思考内容，就把它装进折叠面板
         if think_content:
@@ -1137,7 +1159,7 @@ if st.session_state.df_result is not None:
                         radius=alt.Radius(field="权重", type="quantitative",
                                           scale=alt.Scale(type="sqrt", zero=True, rangeMin=20)),
 
-                        # 👇 核心修改：将Color映射给特征召唤出文字图例，并按权重降序+反转色带，实现深色绑定大权重
+                        # 核心修改：将Color映射给特征召唤出文字图例，并按权重降序+反转色带，实现深色绑定大权重
                         color=alt.Color(field="特征", type="nominal",
                                         sort=alt.SortField(field="权重", order="descending"),
                                         scale=alt.Scale(scheme='redpurple', reverse=True),
@@ -1170,7 +1192,7 @@ if st.session_state.df_result is not None:
             if not user_api_key:
                 st.error("缺少 API Key，无法调用 AI！")
             else:
-                inc_ai()
+                # inc_ai()
                 comments = df['content'].tolist()
                 st.session_state[mod_key] = selected_model
 
@@ -1186,23 +1208,38 @@ if st.session_state.df_result is not None:
                     full_report = st.write_stream(stream_gen)
                     st.session_state[rpt_key] = full_report
 
-                    #  正则提取好评率并存入数据库 
-                    try:
-                        match = re.search(r'预估好评率.*?(\d+(?:\.\d+)?)%', full_report)
-                        positive_rate = float(match.group(1)) if match else 0.0
-                        sales = st.session_state.get('current_sales', 0)
+                    if "AI 分析中断" in full_report:
+                        if "401" in full_report or "Incorrect API key" in full_report or "invalid_api_key" in full_report:
+                            st.error(
+                                ":material/key_off: 您提供的自定义 API Key 无效、已过期或额度不足，请检查后重新输入！")
+                        else:
+                            st.error(f":material/warning: AI 服务器响应异常，请稍后重试。")
+                        # 发生错误时，强制清空缓存的坏报告，避免刷新后依然显示乱码
+                        st.session_state[rpt_key] = None
 
-                        db_manager.save_daily_stats(
-                            user_id=st.session_state.current_user_id,
-                            product_id=st.session_state.product_id,
-                            product_name=st.session_state.product_info,
-                            sales_volume=sales,
-                            positive_rate=positive_rate
-                        )
-                        st.toast(f" 数据已存档！好评率: {positive_rate}% | 销量: {sales}")
-                        # 画图动作会交由上方的 saved_rpt 逻辑处理，保证刷新后也不消失
-                    except Exception as e:
-                        st.error(f"数据存档失败: {e}")
+                    elif "未配置" not in full_report:
+                        # 确认成功生成，且用的是系统的免费额度，才真正扣减次数
+                        if not is_using_custom_key:
+                            inc_ai()
+
+                        #  正则提取好评率并存入数据库
+                        try:
+                            match = re.search(r'预估好评率.*?(\d+(?:\.\d+)?)%', full_report)
+                            positive_rate = float(match.group(1)) if match else 0.0
+                            sales = st.session_state.get('current_sales', 0)
+
+                            db_manager.save_daily_stats(
+                                user_id=st.session_state.current_user_id,
+                                product_id=st.session_state.product_id,
+                                product_name=st.session_state.product_info,
+                                sales_volume=sales,
+                                positive_rate=positive_rate
+                            )
+                            st.toast(f" 数据已存档！好评率: {positive_rate}% | 销量: {sales}")
+                            # 画图动作会交由上方的 saved_rpt 逻辑处理，保证刷新后也不消失
+                        except Exception as e:
+                            st.error(f"数据存档失败: {e}")
+                        st.rerun()
                 else:
                     stream_gen = analyze_market_trends_stream(
                         search_query=st.session_state.product_info,  # 传入搜索词
@@ -1210,9 +1247,23 @@ if st.session_state.df_result is not None:
                         api_key=user_api_key,
                         model=selected_model
                     )
-                    st.session_state[rpt_key] = st.write_stream(stream_gen)
+                    full_report = st.write_stream(stream_gen)
+                    st.session_state[rpt_key] = full_report
 
-                st.rerun()
+                    if "AI 分析中断" in full_report:
+                        if "401" in full_report or "Incorrect API key" in full_report or "invalid_api_key" in full_report:
+                            st.error(
+                                ":material/key_off: 您提供的自定义 API Key 无效、已过期或额度不足，请检查后重新输入！")
+                        else:
+                            st.error(f":material/warning: AI 服务器响应异常，请稍后重试。")
+                        st.session_state[rpt_key] = None
+
+                    elif "未配置" not in full_report:
+                        if not is_using_custom_key:
+                            inc_ai()
+                        st.rerun()
+
+
 
     # 只有商家或管理员，在单品分析模式下，且数据库中有数据时展示
     if is_single and st.session_state.current_role in ['商家', '管理员']:
@@ -1338,10 +1389,10 @@ if st.session_state.df_result is not None:
                     if st.button(":material/search: 自动抓取 3 个竞品", type="primary",
                                  disabled=st.session_state.processing_comp or not can_use_spider()):
                         st.session_state.processing_comp = True
-                        inc_spider()
+                        # inc_spider()
                         st.rerun()
                 else:
-                    if st.button(" 清空重抓", disabled=st.session_state.processing_comp):
+                    if st.button(":material/repeat: 重新抓取", disabled=st.session_state.processing_comp, type="primary"):
                         st.session_state.comp_comments = []
                         st.session_state.report_comp = None
                         st.rerun()
@@ -1384,6 +1435,7 @@ if st.session_state.df_result is not None:
 
                         if len(temp_comp_comments) > 0:
                             st.session_state.comp_comments = temp_comp_comments
+                            inc_spider()
                             status.update(label=" 采集完成！", state="complete")
                         else:
                             status.update(label=" 采集失败", state="error")
@@ -1413,7 +1465,7 @@ if st.session_state.df_result is not None:
                 btn_label = " 重新生成对比报告" if st.session_state.report_comp else f":material/balance: 生成竞品对比报告 ({selected_model})"
                 if st.button(btn_label, type="primary", disabled=not can_use_ai() or st.session_state.processing_comp,
                              use_container_width=True):
-                    inc_ai()
+                    # inc_ai()
                     st.session_state.report_comp_model = selected_model
                     stream_gen = analyze_competitor_comparison_stream(
                         st.session_state.product_info,
@@ -1422,8 +1474,24 @@ if st.session_state.df_result is not None:
                         user_api_key,
                         model=selected_model
                     )
-                    st.session_state.report_comp = st.write_stream(stream_gen)
-                    st.rerun()
+                    full_report = st.write_stream(stream_gen)
+                    st.session_state.report_comp = full_report
+
+                    if "AI 分析中断" in full_report:
+                        if "401" in full_report or "Incorrect API key" in full_report or "invalid_api_key" in full_report:
+                            st.error(
+                                ":material/key_off: 您提供的自定义 API Key 无效、已过期或额度不足，请检查后重新输入！")
+                        else:
+                            st.error(f":material/warning: AI 服务器响应异常，请稍后重试。")
+                        # 发生错误时清空，避免残留
+                        st.session_state.report_comp = None
+
+                    elif "未配置" not in full_report:
+                        if not is_using_custom_key:
+                            inc_ai()
+                        st.rerun()
+
+
 
             if st.session_state.report_comp:
                 st.markdown("---")
@@ -1432,11 +1500,8 @@ if st.session_state.df_result is not None:
 
                 # 强力抹除竞品报告正文里的 JSON 乱码 (完美解决 undefined 未闭合代码块问题)
                 clean_comp_report = st.session_state.report_comp
-                clean_comp_report = re.sub(
-                    r'\s*(?:`{3}(?:json)?\s*)?\{[^{]*?["\'](?:positive|negative)_wordcloud["\'][\s\S]*', '',
-                    clean_comp_report, flags=re.IGNORECASE)
 
-                #  新增：提取并折叠深度思考过程 
+                #  新增：提取并折叠深度思考过程
                 think_content_comp = ""
 
                 # 策略 1：寻找标准的 <think> 标签 (DeepSeek 等原生支持)
@@ -1455,6 +1520,9 @@ if st.session_state.df_result is not None:
                         think_content_comp = alt_match_comp.group(1).strip()
                         # 从正文中精确剔除这段思考文本
                         clean_comp_report = clean_comp_report.replace(alt_match_comp.group(0), "").strip()
+
+                clean_comp_report = re.sub(r'\s*(?:`{3}(?:json)?\s*)?\{\s*".*?"\s*:\s*\d+[\s\S]*', '', clean_comp_report, flags=re.IGNORECASE)
+
 
                 # 如果成功抓到了思考内容，就把它装进折叠面板
                 if think_content_comp:
