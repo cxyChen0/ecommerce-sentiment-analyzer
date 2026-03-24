@@ -11,7 +11,6 @@ except ImportError:
     OpenAI = None
     OPENAI_AVAILABLE = False
 
-
 def get_client(model_name, user_provided_key=None):
     """
     获取OpenAI兼容客户端 (支持智能路由与密钥隔离)
@@ -35,7 +34,6 @@ def get_client(model_name, user_provided_key=None):
             api_key = sys_volc
 
     else:
-        # ======= 阿里云百炼通道 =======
         base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
         if user_provided_key and user_provided_key != sys_volc:
@@ -88,9 +86,6 @@ def stream_wrapper(client, model, messages):
     except Exception as e:
         yield f"\n\n **AI 分析中断**: {str(e)}"
 
-# ==========================================
-# 1. 单品深度分析 (精准数据导向版)
-# ==========================================
 def analyze_single_product_stream(product_name, comments_list, sales_volume=0, api_key=None, model="deepseek-v3.2-exp"):
     client = get_client(model, api_key)
     if not client:
@@ -149,7 +144,6 @@ def analyze_single_product_stream(product_name, comments_list, sales_volume=0, a
     如果你的模型支持输出前置的深度思考或推演过程，请注意：在你的【思考/推演过程】阶段，绝对禁止使用任何 Markdown 格式的标题语法（例如不要使用 #、##、###）。思考过程必须是纯碎的普通段落文本。只有在输出最终正式报告时，才能使用上述 Markdown 语法。
     """
 
-    # 【修改点】：在传给 AI 的 user content 中，明确告诉它商品标题和当前销量
     user_prompt = f"【分析目标商品】：{product_name}\n【当前总销量】：{sales_volume}\n\n【用户评论数据样本】：\n{text_input}"
 
     messages = [
@@ -158,9 +152,6 @@ def analyze_single_product_stream(product_name, comments_list, sales_volume=0, a
     ]
     yield from stream_wrapper(client, model, messages)
 
-# ==========================================
-# 2. 市场调研分析 (加入搜索关键词/市场名称)
-# ==========================================
 def analyze_market_trends_stream(search_query, comments_list, api_key=None, model="qwen-plus"):
     client = get_client(model, api_key)
     if not client:
@@ -215,15 +206,13 @@ def analyze_market_trends_stream(search_query, comments_list, api_key=None, mode
     如果你的模型支持输出前置的深度思考或推演过程，请注意：在你的【思考/推演过程】阶段，绝对禁止使用任何 Markdown 格式的标题语法（例如不要使用 #、##、###）。思考过程必须是纯碎的普通段落文本。只有在输出最终正式报告时，才能使用上述 Markdown 语法。
     """
 
-    # 【修改点】：明确告诉 AI 当前调研的市场或关键词是什么
+    # 明确告诉 AI 当前调研的市场和关键词
     user_prompt = f"【当前调研市场/关键词】：{search_query}\n\n【全网竞品混合评论样本】：\n{text_input}"
 
     messages = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
     yield from stream_wrapper(client, model, messages)
 
-# ==========================================
-# 3. 竞品比对 (战力客观对比版)
-# ==========================================
+
 def analyze_competitor_comparison_stream(my_product_name, my_comments, competitor_comments, api_key=None, model="qwen-max"):
     client = get_client(model, api_key)
     if not client:

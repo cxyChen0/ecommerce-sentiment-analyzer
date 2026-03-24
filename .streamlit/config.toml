@@ -9,6 +9,7 @@ headless = false
 enableCORS = false
 # 禁用XSRF保护（仅用于开发环境）
 enableXsrfProtection = false
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false
