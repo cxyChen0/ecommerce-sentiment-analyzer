@@ -79,6 +79,8 @@ ecommerce-sentiment-analyzer/
 - ✅ 多线程数据采集
 - ✅ 响应式界面设计
 - ✅ 云端部署就绪
+- ✅ 用户认证系统（登录、注册、密码重置）
+- ✅ 角色基于访问控制（管理员、商家、客户）
 
 ## 技术栈
 
@@ -88,6 +90,7 @@ ecommerce-sentiment-analyzer/
 - **爬虫**：Selenium + webdriver-manager
 - **HTTP请求**：Requests
 - **环境管理**：python-dotenv
+- **用户认证**：基于Streamlit的会话管理
 
 ## 配置说明
 
@@ -98,6 +101,12 @@ ecommerce-sentiment-analyzer/
      ```
      # 阿里云百炼 API Key（必填，用于AI分析）
      ALIYUN_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+     
+     # 邮件服务器配置（用于密码重置）
+     SMTP_SERVER=smtp.example.com
+     SMTP_PORT=587
+     SMTP_USER=your_email@example.com
+     SMTP_PASSWORD=your_email_password
      ```
 
 2. **爬虫配置**
@@ -105,6 +114,16 @@ ecommerce-sentiment-analyzer/
    - 主要配置项：
      - `MAX_COMMENTS`: 最大评论数（默认200）
      - `SCROLL_PAUSE_MIN/MAX`: 滚动等待时间
+
+3. **用户认证系统**
+   - 支持三种角色：
+     - **管理员**：可访问所有功能，包括用户管理
+     - **商家**：可访问自己商品的销量趋势分析
+     - **客户**：可访问商品销量分析，但看不到趋势图
+   - 功能：
+     - 用户注册
+     - 登录认证
+     - 密码重置（通过邮件）
 
 ## 注意事项
 
